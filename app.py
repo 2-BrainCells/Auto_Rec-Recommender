@@ -10,13 +10,14 @@ import plotly.graph_objects as go
 import os
 import io
 
-# Import your modules
 from autorec import AutoRec, ARDataset, DataLoader
 from preprocessing import split_data, load_data, device
-from utils import train_ranking, evaluator, masked_loss, generate_autorec_recommendations, load_and_use_config
+from utils import (train_ranking, evaluator, masked_loss, generate_autorec_recommendations, 
+                   load_and_use_config, generate_preference_based_recommendations)
 from hpo import run as run_hpo
 import torch.optim as optim
 import torch.nn as nn
+from sklearn.metrics.pairwise import cosine_similarity
 
 # Page configuration
 st.set_page_config(
@@ -34,7 +35,7 @@ class AutoRecStreamlitUI:
         self.num_items = 0
         self.trained = False
         self.hpo_config_file = "Auto_Rec_best_params"
-    
+
     @st.cache_data
     def process_uploaded_data(_self, uploaded_file):
         """Process uploaded CSV file"""
@@ -44,12 +45,12 @@ class AutoRecStreamlitUI:
             st.write("Original data shape:", df.shape)
             st.write("First few rows:")
             st.dataframe(df.head())
-            
+
             # Check if it's the expected format (user-item interactions starting from column 12)
             if df.shape[1] < 13:
                 st.error("CSV file must have at least 13 columns (user data + item interactions)")
                 return None, 0, 0
-            
+
             # Apply preprocessing similar to your preprocessing.py
             df_items = df.iloc[:, 12:]  # Take columns from 13th onwards
             
@@ -77,13 +78,12 @@ class AutoRecStreamlitUI:
             df_processed['Score'] /= 5.0
             
             st.success(f"✅ Data processed successfully! Users: {num_users}, Items: {num_items}")
-            
             return df_processed, num_users, num_items
             
         except Exception as e:
             st.error(f"Error processing data: {str(e)}")
             return None, 0, 0
-    
+
     def check_hpo_config(self):
         """Check if HPO config file exists and load it"""
         if os.path.exists(self.hpo_config_file):
@@ -94,7 +94,7 @@ class AutoRecStreamlitUI:
                 # Display the existing config
                 with st.expander("📋 Existing HPO Configuration", expanded=False):
                     config_df = pd.DataFrame([
-                        {"Parameter": k, "Value": str(v)} 
+                        {"Parameter": k, "Value": str(v)}
                         for k, v in config['hyperparameters'].items()
                     ])
                     st.dataframe(config_df, hide_index=True)
@@ -106,7 +106,7 @@ class AutoRecStreamlitUI:
         else:
             st.info("ℹ️ No existing HPO configuration found.")
             return None
-    
+
     @st.cache_resource
     def run_hyperparameter_optimization(_self, df, num_users, num_items):
         """Run hyperparameter optimization"""
@@ -115,13 +115,7 @@ class AutoRecStreamlitUI:
             
             # Create a temporary CSV file for the HPO process
             temp_csv_path = "temp_uploaded_data.csv"
-            
-            # Convert processed df back to the format expected by your preprocessing
-            # This is a simplified approach - you might need to adjust based on your exact data format
             df.to_csv(temp_csv_path, index=False)
-            
-            # Update the preprocessing.py path temporarily (if needed)
-            # Or modify the HPO to accept the data directly
             
             progress_bar = st.progress(0)
             status_text = st.empty()
@@ -139,7 +133,7 @@ class AutoRecStreamlitUI:
             # Clean up temporary file
             if os.path.exists(temp_csv_path):
                 os.remove(temp_csv_path)
-            
+                
             progress_bar.empty()
             status_text.empty()
             
@@ -148,7 +142,7 @@ class AutoRecStreamlitUI:
             # Display the optimized parameters
             with st.expander("📊 Optimized Parameters", expanded=True):
                 params_df = pd.DataFrame([
-                    {"Parameter": k, "Value": str(v)} 
+                    {"Parameter": k, "Value": str(v)}
                     for k, v in best_params.items()
                 ])
                 st.dataframe(params_df, hide_index=True)
@@ -158,17 +152,21 @@ class AutoRecStreamlitUI:
         except Exception as e:
             st.error(f"Error during HPO: {str(e)}")
             return None
-    
+
     @st.cache_resource
     def train_model(_self, df, num_users, num_items, training_params, num_epochs=20):
         """Train the AutoRec model with given parameters"""
         try:
+            st.info(f"Starting training with parameters: {training_params}")
+            
             # Split data
             train_data, test_data = split_data(df, training_params.get('split', 0.2))
             
             # Load interaction matrices
             _, _, _, train_inter_mat = load_data(train_data, num_users, num_items)
             _, _, _, test_inter_mat = load_data(test_data, num_users, num_items)
+            
+            st.info(f"Data split complete. Training matrix shape: {train_inter_mat.shape}")
             
             # Create datasets
             train_dataset = ARDataset(train_inter_mat)
@@ -181,6 +179,8 @@ class AutoRecStreamlitUI:
             # Initialize model
             hidden_dim = training_params.get('hidden_dim', 512)
             model = AutoRec(hidden_dim, num_items).to(device)
+            
+            st.info(f"Model initialized with hidden_dim: {hidden_dim}")
             
             lr = training_params.get('lr', 0.001)
             weight_decay = training_params.get('weight_decay', 1e-4)
@@ -199,7 +199,6 @@ class AutoRecStreamlitUI:
             for epoch in range(num_epochs):
                 model.train()
                 total_loss = 0.0
-                
                 for batch, mask in train_iter:
                     batch, mask = batch.to(device), mask.to(device)
                     optimizer.zero_grad()
@@ -224,12 +223,15 @@ class AutoRecStreamlitUI:
             progress_bar.empty()
             status_text.empty()
             
+            st.success(f"✅ Training completed! Final RMSE: {test_rmses[-1]:.4f}")
+            
             return model, test_inter_mat, train_losses, test_losses, test_rmses
             
         except Exception as e:
-            st.error(f"Error training model: {str(e)}")
+            st.error(f"❌ Error training model: {str(e)}")
+            st.exception(e)
             return None, None, [], [], []
-    
+
     def plot_training_curves(self, train_losses, test_losses, test_rmses):
         """Plot training curves"""
         if train_losses:
@@ -252,7 +254,7 @@ class AutoRecStreamlitUI:
             
             plt.tight_layout()
             st.pyplot(fig)
-    
+
     def render_sidebar(self):
         """Render the sidebar with user inputs"""
         st.sidebar.header("🎯 AutoRec Recommender")
@@ -283,7 +285,7 @@ class AutoRecStreamlitUI:
                 help="Run new hyperparameter optimization even if existing config is found"
             )
             
-            # Training parameters (shown if no HPO or manual override)
+            # Training parameters
             if force_new_hpo or not use_existing_hpo:
                 st.sidebar.subheader("🎛️ Manual Parameters")
                 
@@ -346,14 +348,102 @@ class AutoRecStreamlitUI:
             }, user_type
         
         return None, {}, "New User"
-    
+
     def render_user_input(self, user_type):
-        """Render user input based on type"""
+        """Enhanced user input with preference sliders for new users"""
         if user_type == "New User":
             st.subheader("👤 New User Profile")
-            st.info("For new users, we'll provide popularity-based recommendations")
-            return None
+            
+            # Fixed category mapping with integer indices
+            categories = {
+                "Audio Book Tools": [0, 1],  # T1, T2
+                "Color-Coded Text": [2],  # T3
+                "Assistive Writing Tools": [3, 4],  # T4, T5
+                "Text Structuring Tools": [5, 6],  # T6, T7
+                "Pre-made Visual Aids": [7, 8, 9],  # T8, T9, T10
+                "Digital Books": [10],  # T11
+                "Digital Tutor": [11],  # T12
+                "Visual Memory Aids": [12, 13],  # T13, T14
+                "Multimedia Lesson Recording": [14, 15, 16],  # T15, T16, S15
+                "Supplementary Research": [16],  # T17
+                "Personal Reader Support": [17],  # S1
+                "Self-made Study Aids": [18, 19, 20],  # S2, S3, S4
+                "Repetition Strategy": [21],  # S5
+                "Active Reading Markup": [22, 23],  # S6, S7
+                "Group Study": [24],  # S8
+                "Tutoring Support": [25],  # S9
+                "Peer Association": [26],  # S10
+                "In-person Attendance": [27],  # S11
+                "Online Lessons": [28],  # S12
+                "Classroom Support Aids": [29, 30],  # S13, S14
+                "Note Taking": [31],  # S16
+                "Lesson Planning": [32],  # S17
+                "Assessment Adaptation": [33],  # S18
+                "Written Assessment": [34],  # S19
+                "Oral Assessment": [35],  # S20
+                "Individual Assessment": [36],  # S21
+                "Online Study Resources": [37]  # S22
+            }
+            
+            st.markdown("**📊 Rate your interest in different learning aid categories:**")
+            st.markdown("*Use the sliders below to indicate how much you'd like each type of learning aid (1=Not interested, 5=Very interested)*")
+            
+            preferences = {}
+            
+            # Create two columns for better layout
+            col1, col2 = st.columns(2)
+            
+            category_items = list(categories.items())
+            mid_point = len(category_items) // 2
+            
+            with col1:
+                for category, item_ids in category_items[:mid_point]:
+                    rating = st.slider(
+                        f"🎯 {category}",
+                        min_value=1, max_value=5, value=3,
+                        key=f"pref_{category}",
+                        help=f"Rate your interest in {category.lower()}"
+                    )
+                    preferences[category] = {
+                        'rating': rating,
+                        'item_ids': item_ids
+                    }
+            
+            with col2:
+                for category, item_ids in category_items[mid_point:]:
+                    rating = st.slider(
+                        f"🎯 {category}",
+                        min_value=1, max_value=5, value=3,
+                        key=f"pref_{category}",
+                        help=f"Rate your interest in {category.lower()}"
+                    )
+                    preferences[category] = {
+                        'rating': rating,
+                        'item_ids': item_ids
+                    }
+            
+            # Show preference summary
+            if st.checkbox("📋 Show Preference Summary", value=False):
+                st.subheader("Your Preferences")
+                pref_df = pd.DataFrame([
+                    {
+                        'Category': category,
+                        'Interest Level': '⭐' * data['rating'],
+                        'Rating': data['rating']
+                    }
+                    for category, data in preferences.items()
+                    if data['rating'] > 3  # Only show above-neutral preferences
+                ])
+                
+                if not pref_df.empty:
+                    st.dataframe(pref_df, hide_index=True)
+                else:
+                    st.info("Adjust sliders above 3 to see your preferences!")
+            
+            return {"type": "preferences", "data": preferences}
+        
         else:
+            # Existing user logic
             st.subheader("🔍 Existing User")
             if self.num_users > 0:
                 user_id = st.number_input(
@@ -375,47 +465,136 @@ class AutoRecStreamlitUI:
                         - Avg Rating: {avg_rating:.2f}
                         """)
                 
-                return user_id
+                return {"type": "existing", "data": user_id}
             else:
                 st.error("No trained model available")
-                return 0
-    
+                return {"type": "existing", "data": 0}
+
     def generate_recommendations(self, user_input, user_type):
-        """Generate recommendations based on user input"""
+        """Enhanced recommendation generation with preference slider support"""
         if self.model is None or self.interaction_matrix is None:
             st.error("Model not trained. Please train the model first.")
             return []
-        
+
         try:
             if user_type == "New User":
-                recommendations = generate_autorec_recommendations(
-                    model=self.model,
-                    interaction_matrix=self.interaction_matrix,
-                    device=device,
-                    user_id=None,
-                    new_user_method='popularity',
-                    top_k=10
-                )
+                if user_input["type"] == "preferences":
+                    # Check if user has provided meaningful preferences
+                    meaningful_prefs = {k: v for k, v in user_input["data"].items() 
+                                      if v['rating'] != 3}  # Different from neutral
+                    
+                    if meaningful_prefs:
+                        # Use preference-based recommendations
+                        recommendations = generate_preference_based_recommendations(
+                            model=self.model,
+                            interaction_matrix=self.interaction_matrix,
+                            device=device,
+                            preferences=user_input["data"],
+                            top_k=10
+                        )
+                        st.success("🎯 Recommendations based on your preferences!")
+                        
+                        # Show preference impact
+                        self.show_preference_impact(user_input["data"], recommendations)
+                        
+                    else:
+                        # All neutral preferences - fall back to popularity
+                        recommendations = generate_autorec_recommendations(
+                            model=self.model,
+                            interaction_matrix=self.interaction_matrix,
+                            device=device,
+                            user_id=None,
+                            new_user_method='popularity',
+                            top_k=10
+                        )
+                        st.info("📈 Popular items (no specific preferences detected)")
+                else:
+                    # Standard popularity fallback
+                    recommendations = generate_autorec_recommendations(
+                        model=self.model,
+                        interaction_matrix=self.interaction_matrix,
+                        device=device,
+                        user_id=None,
+                        new_user_method='popularity',
+                        top_k=10
+                    )
             else:
+                # Existing user logic
                 recommendations = generate_autorec_recommendations(
                     model=self.model,
                     interaction_matrix=self.interaction_matrix,
                     device=device,
-                    user_id=user_input,
+                    user_id=user_input["data"],
                     top_k=10
                 )
             
             return recommendations
+
         except Exception as e:
             st.error(f"Error generating recommendations: {str(e)}")
             return []
-    
+
+    def show_preference_impact(self, preferences, recommendations):
+        """Show how preferences influenced recommendations"""
+        st.subheader("🔍 How Your Preferences Influenced Recommendations")
+        
+        # Map recommendations back to categories (using integer indices)
+        categories = {
+            "Audio Book Tools": [0, 1],
+            "Color-Coded Text": [2],
+            "Assistive Writing Tools": [3, 4],
+            "Text Structuring Tools": [5, 6],
+            "Pre-made Visual Aids": [7, 8, 9],
+            "Digital Books": [10],
+            "Digital Tutor": [11],
+            "Visual Memory Aids": [12, 13],
+            "Multimedia Lesson Recording": [14, 15, 16],
+            "Supplementary Research": [16],
+            "Personal Reader Support": [17],
+            "Self-made Study Aids": [18, 19, 20],
+            "Repetition Strategy": [21],
+            "Active Reading Markup": [22, 23],
+            "Group Study": [24],
+            "Tutoring Support": [25],
+            "Peer Association": [26],
+            "In-person Attendance": [27],
+            "Online Lessons": [28],
+            "Classroom Support Aids": [29, 30],
+            "Note Taking": [31],
+            "Lesson Planning": [32],
+            "Assessment Adaptation": [33],
+            "Written Assessment": [34],
+            "Oral Assessment": [35],
+            "Individual Assessment": [36],
+            "Online Study Resources": [37]
+        }
+        
+        # Analyze recommendations vs preferences
+        rec_items = [item_id for item_id, _ in recommendations[:5]]
+        
+        impact_data = []
+        for category, data in preferences.items():
+            if data['rating'] > 3:  # Above neutral
+                matching_recs = len([item for item in rec_items if item in data['item_ids']])
+                if matching_recs > 0:
+                    impact_data.append({
+                        'Category': category,
+                        'Your Rating': '⭐' * data['rating'],
+                        'Items Recommended': matching_recs
+                    })
+        
+        if impact_data:
+            impact_df = pd.DataFrame(impact_data)
+            st.dataframe(impact_df, hide_index=True)
+        else:
+            st.info("Your recommendations are based on similarity with other users who have similar overall preferences.")
+
     def display_recommendations_ui(self, recommendations, user_type):
         """Display recommendations in the UI"""
         if not recommendations:
             st.warning("No recommendations available.")
             return
-        
+
         st.subheader(f"🎯 Top Recommendations for {user_type}")
         
         # Create DataFrame for better display
@@ -452,7 +631,23 @@ class AutoRecStreamlitUI:
                 title="Top 5 Items Distribution"
             )
             st.plotly_chart(fig_pie, use_container_width=True)
-    
+
+    def show_training_status(self):
+        """Show current training status"""
+        if self.trained:
+            st.success("✅ Model is trained and ready for recommendations!")
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Users", self.num_users)
+            with col2:
+                st.metric("Items", self.num_items)
+            with col3:
+                if self.interaction_matrix is not None:
+                    density = np.count_nonzero(self.interaction_matrix) / (self.num_users * self.num_items) * 100
+                    st.metric("Matrix Density", f"{density:.1f}%")
+        else:
+            st.warning("⚠️ Model not trained yet. Please train the model first.")
+
     def run(self):
         """Main function to run the Streamlit app"""
         # Header
@@ -474,7 +669,6 @@ class AutoRecStreamlitUI:
                 
                 # HPO Configuration Logic
                 st.subheader("🔍 Hyperparameter Configuration")
-                
                 training_params = None
                 
                 # Check for existing HPO config
@@ -492,59 +686,77 @@ class AutoRecStreamlitUI:
                         training_params = optimization_settings['manual_params']
                         st.info("📝 Using manual parameters for training.")
                 
-                # Training section
                 if training_params:
                     st.subheader("🤖 Model Training")
                     
-                    if st.button("Train Model", type="primary"):
+                    # Check if we should auto-train after HPO
+                    auto_train_after_hpo = st.checkbox(
+                        "Auto-train after HPO",
+                        value=True,
+                        help="Automatically train model after hyperparameter optimization"
+                    )
+                    
+                    # Auto-train condition or manual train button
+                    should_train = False
+                    
+                    if auto_train_after_hpo and not self.trained:
+                        should_train = True
+                        st.info("🚀 Auto-training model with optimized parameters...")
+                    elif st.button("Train Model", type="primary"):
+                        should_train = True
+                    
+                    if should_train:
                         with st.spinner("Training AutoRec model..."):
                             self.model, self.interaction_matrix, train_losses, test_losses, test_rmses = self.train_model(
                                 df, num_users, num_items, training_params, optimization_settings['num_epochs']
                             )
-                        
-                        if self.model is not None:
-                            self.trained = True
-                            st.success("✅ Model trained successfully!")
-                            
-                            # Plot training curves
-                            st.subheader("📈 Training Progress")
-                            self.plot_training_curves(train_losses, test_losses, test_rmses)
-                            
-                            # Store in session state
-                            st.session_state.model = self.model
-                            st.session_state.interaction_matrix = self.interaction_matrix
-                            st.session_state.num_users = self.num_users
-                            st.session_state.num_items = self.num_items
-                            st.session_state.trained = True
-                    
-                    # Load from session state if available
-                    if 'trained' in st.session_state and st.session_state.trained:
-                        self.model = st.session_state.model
-                        self.interaction_matrix = st.session_state.interaction_matrix
-                        self.num_users = st.session_state.num_users
-                        self.num_items = st.session_state.num_items
-                        self.trained = True
-                        
-                        st.success("✅ Trained model loaded from session!")
-                    
-                    # Recommendations section
-                    if self.trained:
-                        st.markdown("---")
-                        st.subheader("🎯 Generate Recommendations")
-                        
-                        user_input = self.render_user_input(user_type)
-                        
-                        if st.button("Generate Recommendations", type="secondary"):
-                            with st.spinner("Generating recommendations..."):
-                                recommendations = self.generate_recommendations(user_input, user_type)
-                                self.display_recommendations_ui(recommendations, user_type)
-                    
-                    else:
-                        st.info("👆 Please train the model to generate recommendations.")
+
+                            if self.model is not None:
+                                self.trained = True
+                                st.success("✅ Model trained successfully!")
+                                
+                                # Plot training curves
+                                st.subheader("📈 Training Progress")
+                                self.plot_training_curves(train_losses, test_losses, test_rmses)
+
+                                # Store in session state
+                                st.session_state.model = self.model
+                                st.session_state.interaction_matrix = self.interaction_matrix
+                                st.session_state.num_users = self.num_users
+                                st.session_state.num_items = self.num_items
+                                st.session_state.trained = True
+                            else:
+                                st.error("❌ Model training failed!")
                 
+                # Load from session state if available
+                if 'trained' in st.session_state and st.session_state.trained:
+                    self.model = st.session_state.model
+                    self.interaction_matrix = st.session_state.interaction_matrix
+                    self.num_users = st.session_state.num_users
+                    self.num_items = st.session_state.num_items
+                    self.trained = True
+                    st.success("✅ Trained model loaded from session!")
+                
+                # Training status
+                if training_params:
+                    st.markdown("---")
+                    self.show_training_status()
+                
+                # Recommendations section
+                if self.trained:
+                    st.markdown("---")
+                    st.subheader("🎯 Generate Recommendations")
+                    
+                    user_input = self.render_user_input(user_type)
+                    
+                    if st.button("Generate Recommendations", type="secondary"):
+                        with st.spinner("Generating recommendations..."):
+                            recommendations = self.generate_recommendations(user_input, user_type)
+                            self.display_recommendations_ui(recommendations, user_type)
                 else:
-                    st.info("🔧 Please configure hyperparameters (run HPO or set manual parameters) before training.")
-        
+                    st.info("👆 Please train the model to generate recommendations.")
+            else:
+                st.info("🔧 Please configure hyperparameters (run HPO or set manual parameters) before training.")
         else:
             st.info("📁 Please upload a CSV file to get started.")
             
@@ -552,8 +764,6 @@ class AutoRecStreamlitUI:
             st.subheader("📋 Expected CSV Format")
             st.markdown("""
             Your CSV file should have:
-            - First 12 columns: User demographic/metadata (optional)
-            - Columns 13+: User-item interaction scores (ratings from 1-5)
             - Rows: Individual users
             - Missing values: Use 'NC', 'NSU', or leave blank
             """)

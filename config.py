@@ -3,27 +3,26 @@ import pickle
 from typing import Dict, Any, Optional
 
 class ConfigManager:
-    """
-    Python-based configuration management without YAML files
-    """
-    
+    """Python-based configuration management without YAML files"""
+
     def __init__(self, config_file: str = "autorec_config.pkl"):
         self.config_file = config_file
         self.default_config = self._create_default_config()
-    
+
     def _create_default_config(self) -> Dict[str, Any]:
         """Create default configuration"""
         return {
             'model_config': {
                 'name': 'AutoRec',
-                'model_type': 'autoencoder'
+                'model_type': 'autoencoder',
+                'use_demographics': False  # Added no-demographics flag
             },
             'hyperparameters': {
                 'hidden_dim': 512,
-                'lr': 0.001,  # Using 'lr' to match existing code
+                'lr': 0.001,
                 'weight_decay': 0.0001,
                 'batch_size': 64,
-                'split': 0.2,  # Using 'split' to match existing code
+                'split': 0.2,
                 'dropout': 0.2
             },
             'training': {
@@ -36,13 +35,13 @@ class ConfigManager:
                 'best_value': None
             }
         }
-    
+
     def save_config(self, config: Dict[str, Any]) -> None:
         """Save configuration to pickle file"""
         with open(self.config_file, 'wb') as f:
             pickle.dump(config, f)
         print(f"Configuration saved to {self.config_file}")
-    
+
     def load_config(self) -> Dict[str, Any]:
         """Load configuration from pickle file"""
         if os.path.exists(self.config_file):
@@ -51,21 +50,16 @@ class ConfigManager:
         else:
             print(f"Config file not found. Using default configuration.")
             return self.default_config.copy()
-    
+
     def update_from_hpo(self, best_params: Dict[str, Any], best_value: float) -> Dict[str, Any]:
         """Update configuration with HPO results"""
         config = self.load_config()
-        
-        # Update hyperparameters directly (keys already match)
         config['hyperparameters'].update(best_params)
-        
-        # Update optimization results
         config['optimization_results'] = {
             'optimized': True,
             'best_value': best_value,
             'best_params': best_params
         }
-        
         self.save_config(config)
         return config
 
