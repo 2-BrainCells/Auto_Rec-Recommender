@@ -89,20 +89,6 @@ Minimum Size: At least 100 users recommended for stable training
 
 Format: CSV with UTF-8 encoding
 
-🏗️ Project Structure
-text
-├── app.py                 # Main Streamlit application
-├── autorec.py             # AutoRec model implementation
-├── config.py              # Configuration management
-├── hpo.py                 # Hyperparameter optimization
-├── main.py                # Command line runner
-├── preprocessing.py       # Data preprocessing utilities
-├── utils.py               # Utility functions and predictors
-├── requirements.txt       # Python dependencies
-├── README.md              # This file
-├── data/
-│   └── values.csv        # Your dataset (place here)
-└── .gitignore            # Git ignore file
 🎮 Usage Guide
 For New Users
 Upload Data: Click "Browse files" and upload your CSV
