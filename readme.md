@@ -235,7 +235,7 @@ config = {
     'num_epochs': 20         # Faster training
 }
 
-# In app.py, add at the top
+In app.py, add at the top
 
 import streamlit as st
 st.set_option('deprecation.showPyplotGlobalUse', False)
