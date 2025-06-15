@@ -54,7 +54,7 @@ pyyaml>=6.0
 
 Clone the repository
 
-git clone https://github.com/your-username/autorec-recommendation-system.git
+git clone git@github.com:2-BrainCells/Auto_Rec-Recommender.git
 cd autorec-recommendation-system
 Create virtual environment
 
