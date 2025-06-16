@@ -35,6 +35,51 @@ class AutoRecStreamlitUI:
         self.trained = False
         self.hpo_config_file = "Auto_Rec_best_params"
         self.pkl_config_file = "autorec_config.pkl"
+        
+        self.item_names = {
+            '0': 'Strumenti di supporto allo studio [Audio libro con voce umana]',
+            '1': 'Strumenti di supporto allo studio [Audio libro con voce robotica]',
+            '2': 'Strumenti di supporto allo studio [Parole scritte in colori diversi]',
+            '3': 'Strumenti di supporto allo studio [Utilizzo del carattere EasyReading]',
+            '4': 'Strumenti di supporto allo studio [Utilizzo di una smart pen o di un tablet dove prendere appunti e registrare la voce]',
+            '5': 'Strumenti di supporto allo studio [Impaginazione più chiara del materiale di studio]',
+            '6': 'Strumenti di supporto allo studio [Avere le parole chiave del testo evidenziate]',
+            '7': 'Strumenti di supporto allo studio [Mappe concettuali già pronte]',
+            '8': 'Strumenti di supporto allo studio [Schemi già pronti]',
+            '9': 'Strumenti di supporto allo studio [Riassunti già pronti]',
+            '10': 'Strumenti di supporto allo studio [E-book (libri digitali)]',
+            '11': 'Strumenti di supporto allo studio [Tutor digitale (tipo Siri) a cui chiedere le cose non chiare]',
+            '12': 'Strumenti di supporto allo studio [Immagini che aiutino a capire e ricordare il significato di singole parole difficili]',
+            '13': 'Strumenti di supporto allo studio [Immagini che aiutino a memorizzare e ricordare un concetto]',
+            '14': 'Strumenti di supporto allo studio [Registrazione audio delle lezioni]',
+            '15': 'Strumenti di supporto allo studio [Video lezioni]',
+            '16': 'Strumenti di supporto allo studio [Avere la possibilità di integrare il materiale di studio con ricerche su internet]',
+            '17': 'Strategie di supporto allo studio [Una persona che legge per me]',
+            '18': 'Strategie di supporto allo studio [Mappe fatte da me]',
+            '19': 'Strategie di supporto allo studio [Schemi fatti da me]',
+            '20': 'Strategie di supporto allo studio [Riassunti fatti da me]',
+            '21': 'Strategie di supporto allo studio [Ripetere il materiale studiato]',
+            '22': 'Strategie di supporto allo studio [Segnare le parole chiave]',
+            '23': 'Strategie di supporto allo studio [Sottolineare con colori diversi]',
+            '24': 'Strategie di supporto allo studio [Avere un gruppo di studio]',
+            '25': 'Strategie di supporto allo studio [Avere un tutor]',
+            '26': 'Strategie di supporto allo studio [Creare un associazione di studenti con dislessia per scambiarsi informazioni e risorse]',
+            '27': 'Strategie di supporto allo studio [Frequentare le lezioni in presenza]',
+            '28': 'Strategie di supporto allo studio [Avere a disposizione le lezioni online]',
+            '29': 'Strategie di supporto allo studio [Fare delle pause durante le lezioni]',
+            '30': 'Strategie di supporto allo studio [Avere a disposizione le slide delle lezioni]',
+            '31': 'Strategie di supporto allo studio [Registrare le lezioni]',
+            '32': 'Strategie di supporto allo studio [Prendere appunti]',
+            '33': 'Strategie di supporto allo studio [Avere in anticipo il programma delle lezioni]',
+            '34': 'Strategie di supporto allo studio [Avere la possibilità di suddividere in più parti un esame/ o un compito/interrogazione]',
+            '35': 'Strategie di supporto allo studio [Avere esami o verifiche solo scritte]',
+            '36': 'Strategie di supporto allo studio [Avere esami o verifiche solo orali]',
+            '37': 'Strategie di supporto allo studio [Svolgere gli esami o i compiti/interrogazioni in presenza del solo professore]',
+            '38': 'Strategie di supporto allo studio [Avere a disposizione un database online con appunti, schemi, riassunti ecc. fatti da altri studenti]'
+        }
+
+    def get_item_name(self, item_id):
+        return self.item_names.get(str(item_id), f"Learning Aid {item_id}")
 
     @st.cache_data
     def process_uploaded_data(_self, uploaded_file):
@@ -336,24 +381,24 @@ class AutoRecStreamlitUI:
                 "Digital Tutor": [11],
                 "Visual Memory Aids": [12, 13],
                 "Multimedia Lesson Recording": [14, 15, 16],
-                "Supplementary Research": [16],
-                "Personal Reader Support": [17],
-                "Self-made Study Aids": [18, 19, 20],
-                "Repetition Strategy": [21],
-                "Active Reading Markup": [22, 23],
-                "Group Study": [24],
-                "Tutoring Support": [25],
-                "Peer Association": [26],
-                "In-person Attendance": [27],
-                "Online Lessons": [28],
-                "Classroom Support Aids": [29, 30],
-                "Note Taking": [31],
-                "Lesson Planning": [32],
-                "Assessment Adaptation": [33],
-                "Written Assessment": [34],
-                "Oral Assessment": [35],
-                "Individual Assessment": [36],
-                "Online Study Resources": [37]
+                "Supplementary Research": [17],
+                "Personal Reader Support": [18],
+                "Self-made Study Aids": [19, 20, 21],
+                "Repetition Strategy": [22],
+                "Active Reading Markup": [23, 24],
+                "Group Study": [25],
+                "Tutoring Support": [26],
+                "Peer Association": [27],
+                "In-person Attendance": [28],
+                "Online Lessons": [29],
+                "Classroom Support Aids": [30, 31],
+                "Note Taking": [32],
+                "Lesson Planning": [33],
+                "Assessment Adaptation": [34],
+                "Written Assessment": [35],
+                "Oral Assessment": [36],
+                "Individual Assessment": [37],
+                "Online Study Resources": [38]
             }
 
             st.markdown("**📊 Rate your interest in different learning aid categories:**")
@@ -492,7 +537,7 @@ class AutoRecStreamlitUI:
     def show_preference_impact(self, preferences, recommendations):
         st.subheader("🔍 How Your Preferences Influenced Recommendations")
 
-        category = {
+        categories = {
             "Audio Book Tools": [0, 1],
             "Color-Coded Text": [2],
             "Assistive Writing Tools": [3, 4],
@@ -553,7 +598,7 @@ class AutoRecStreamlitUI:
                 'Rank': i + 1,
                 'Item ID': item_id,
                 'Predicted Score': f"{score:.4f}",
-                'Item Name': f"Learning Aid {item_id}"
+                'Item Name': self.get_item_name(item_id)
             }
             for i, (item_id, score) in enumerate(recommendations)
         ])
