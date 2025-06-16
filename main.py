@@ -8,14 +8,16 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 def auto_rec_runner():
-    # Validate no demographics are used
+    """
+    Main execution function for AutoRec recommendation system.
+    Handles data validation, hyperparameter optimization, model training, and recommendation generation.
+    """
     try:
         df_full = pd.read_csv('data/values.csv')
         validate_no_demographics_used(df_full)
     except Exception as e:
         print(f"Validation warning: {e}")
-    
-    # Check if optimized config exists
+
     if os.path.exists("autorec_config.pkl"):
         config = get_config()
         if config['optimization_results']['optimized']:
@@ -33,8 +35,8 @@ def auto_rec_runner():
         best_params = config['hyperparameters']
 
     print(f"Runnable Configs: {best_params}")
-    batch_size = best_params["batch_size"]
 
+    batch_size = best_params["batch_size"]
     df, num_users, num_items = read_data()
     print(df.shape, num_users, num_items)
 
@@ -79,7 +81,6 @@ def auto_rec_runner():
         inter_mat=test_inter_mat
     )
 
-    # Plot results
     plt.figure(figsize=(8, 6))
     plt.plot(train_loss, label='Train Loss')
     plt.plot(test_loss, label='Test Loss')
@@ -94,7 +95,6 @@ def auto_rec_runner():
     print("GENERATING RECOMMENDATIONS (NO DEMOGRAPHICS USED)")
     print("="*50)
 
-    # Test recommendations for existing users
     sample_users = [0, 500, 1103] if test_inter_mat.shape[0] > 10 else [0]
     for user_id in sample_users:
         recommendations = generate_autorec_recommendations(
@@ -106,7 +106,6 @@ def auto_rec_runner():
         )
         display_recommendations(recommendations, f"Existing User {user_id}")
 
-    # New users - popularity-based (no demographics)
     new_user_recs_pop = generate_autorec_recommendations(
         model=net,
         interaction_matrix=test_inter_mat,
@@ -117,7 +116,6 @@ def auto_rec_runner():
     )
     display_recommendations(new_user_recs_pop, "New User (Popular Items)")
 
-    # New users - average profile
     new_user_recs_avg = generate_autorec_recommendations(
         model=net,
         interaction_matrix=test_inter_mat,
