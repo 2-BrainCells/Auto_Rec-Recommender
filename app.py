@@ -492,7 +492,7 @@ class AutoRecStreamlitUI:
     def show_preference_impact(self, preferences, recommendations):
         st.subheader("🔍 How Your Preferences Influenced Recommendations")
 
-        categories = {
+        category = {
             "Audio Book Tools": [0, 1],
             "Color-Coded Text": [2],
             "Assistive Writing Tools": [3, 4],
