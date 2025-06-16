@@ -199,20 +199,6 @@ Modify similarity calculation in utils.py:
 python
 from sklearn.metrics.pairwise import cosine_similarity, euclidean_distances
 
-# Use different similarity metrics
-
-similarities = euclidean_distances([preference_profile], self.interaction_matrix)[0]
-🚨 Troubleshooting
-Common Issues
-Issue	Solution
-CSV Format Error	Ensure CSV has at least 13 columns, UTF-8 encoding
-Memory Issues	Reduce batch_size and hidden_dim in configuration
-Training Fails	Check for sufficient data (min 100 users recommended)
-No Recommendations	Ensure model training completed successfully
-Import Errors	Install all requirements: pip install -r requirements.txt
-Performance Optimization
-python
-
 # For large datasets
 
 config = {
