@@ -8,43 +8,22 @@ from preprocessing import device
 import matplotlib.pyplot as plt
 from sklearn.metrics.pairwise import cosine_similarity
 
-class EarlyStoppingCallback:
-    """
-    Early stopping callback for Optuna optimization to prevent overfitting.
-    Monitors improvement in objective value and stops if no progress is made.
-    """
-    
+class EarlyStopping:
     def __init__(self, patience=5, min_delta=0.0):
-        """
-        Initialize early stopping parameters.
-        
-        Args:
-            patience: Number of trials to wait without improvement
-            min_delta: Minimum change required to qualify as improvement
-        """
         self.patience = patience
         self.min_delta = min_delta
-        self.best_value = float('inf')
-        self.no_improvement_count = 0
+        self.best_score = None
+        self.counter = 0
+        self.early_stop = False
 
-    def __call__(self, study, trial):
-        """
-        Check if optimization should be stopped based on recent progress.
-        
-        Args:
-            study: Optuna study object
-            trial: Current trial object
-        """
-        current_value = study.best_value
-        if current_value < self.best_value - self.min_delta:
-            self.best_value = current_value
-            self.no_improvement_count = 0
+    def __call__(self, current_value):
+        if self.best_score is None or current_value < self.best_score - self.min_delta:
+            self.best_score = current_value
+            self.counter = 0
         else:
-            self.no_improvement_count += 1
-
-        if self.no_improvement_count >= self.patience:
-            study.stop()
-
+            self.counter += 1
+            if self.counter >= self.patience:
+                self.early_stop = True
 
 def masked_loss(predictions, targets, mask, loss_fn=nn.MSELoss(reduction='none')):
     """
@@ -54,29 +33,63 @@ def masked_loss(predictions, targets, mask, loss_fn=nn.MSELoss(reduction='none')
     loss = loss_fn(predictions, targets) * mask
     return loss.sum() / mask.sum()
 
-def evaluator(net, test_data, inter_matrix, loss_fn, device=device):
+# def evaluator(net, test_data, inter_matrix, loss_fn, device=device):
+#     """
+#     Evaluate trained AutoRec model performance on test data.
+#     Computes test loss and RMSE metrics for model validation.
+#     """
+#     net.eval()
+#     scores = []
+#     total_loss = 0.0
+
+#     with torch.no_grad():
+#         for values, mask in test_data:
+#             values, mask = values.to(device), mask.to(device)
+#             preds = net(values)
+#             scores.append(preds.to('cpu').numpy())
+#             loss = masked_loss(preds, values, mask, loss_fn)
+#             total_loss += loss.item()
+
+#     recons = np.vstack(scores)
+#     inter_matrix = np.array(inter_matrix, dtype=np.float16)
+#     rmse = np.sqrt(np.sum(np.square(inter_matrix - np.sign(inter_matrix) * recons)) / np.sum(np.sign(inter_matrix)))
+#     loss = total_loss / len(test_data)
+
+#     return loss, rmse
+
+def evaluator(net, test_data, loss_fn, device=device):
     """
     Evaluate trained AutoRec model performance on test data.
     Computes test loss and RMSE metrics for model validation.
+    Both metrics are calculated over the same observed (masked) ratings.
     """
     net.eval()
-    scores = []
+    all_preds = []
+    all_trues = []
+    all_masks = []
     total_loss = 0.0
 
     with torch.no_grad():
         for values, mask in test_data:
             values, mask = values.to(device), mask.to(device)
             preds = net(values)
-            scores.append(preds.to('cpu').numpy())
+            all_preds.append(preds.cpu().numpy())
+            all_trues.append(values.cpu().numpy())
+            all_masks.append(mask.cpu().numpy())
             loss = masked_loss(preds, values, mask, loss_fn)
             total_loss += loss.item()
 
-    recons = np.vstack(scores)
-    inter_matrix = np.array(inter_matrix, dtype=np.float16)
-    rmse = np.sqrt(np.sum(np.square(inter_matrix - np.sign(inter_matrix) * recons)) / np.sum(np.sign(inter_matrix)))
-    loss = total_loss / len(test_data)
+    preds = np.concatenate(all_preds, axis=0)
+    trues = np.concatenate(all_trues, axis=0)
+    masks = np.concatenate(all_masks, axis=0)
 
-    return loss, rmse
+    # Compute masked RMSE over all observed entries
+    mse = np.sum(((preds - trues) ** 2) * masks) / np.sum(masks)
+    rmse = np.sqrt(mse)
+
+    avg_loss = total_loss / len(test_data)
+    return avg_loss, rmse
+
 
 def train_ranking(net, train_iter, test_iter, loss_fn, optimizer, num_epochs, device=None, evaluator=None, inter_mat=None, early_stopping_patience=5):
     """
@@ -85,7 +98,7 @@ def train_ranking(net, train_iter, test_iter, loss_fn, optimizer, num_epochs, de
     """
     net.train()
     train_loss, test_loss, test_rmse = [], [], []
-    early_stopper = EarlyStoppingCallback(patience=early_stopping_patience, min_delta=1e-4)
+    early_stopper = EarlyStopping(patience=early_stopping_patience, min_delta=1e-4)
     for epoch in range(num_epochs):
         total_loss = 0.0
         for batch, mask in train_iter:
@@ -100,7 +113,7 @@ def train_ranking(net, train_iter, test_iter, loss_fn, optimizer, num_epochs, de
         train_l = total_loss / len(train_iter)
 
         if evaluator:
-            test_l, rmse = evaluator(net, test_iter, inter_mat, loss_fn)
+            test_l, rmse = evaluator(net, test_iter, loss_fn, device)
         else:
             test_l, rmse = None, None
 

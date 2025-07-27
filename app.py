@@ -13,6 +13,7 @@ from autorec import AutoRec, ARDataset, DataLoader
 from preprocessing import split_data, load_data, device
 from utils import (train_ranking, evaluator, masked_loss, generate_autorec_recommendations,
                    load_and_use_config, generate_preference_based_recommendations)
+from utils import EarlyStopping
 from hpo import run as run_hpo
 import torch.optim as optim
 import torch.nn as nn
@@ -221,6 +222,8 @@ class AutoRecStreamlitUI:
 
             progress_bar = st.progress(0)
             status_text = st.empty()
+            
+            early_stopper = EarlyStopping(patience=7, min_delta=1e-4)      
 
             train_losses = []
             test_losses = []
@@ -239,7 +242,7 @@ class AutoRecStreamlitUI:
                     total_loss += loss.item()
 
                 train_l = total_loss / len(train_iter)
-                test_l, rmse = evaluator(model, test_iter, test_inter_mat, loss_fn)
+                test_l, rmse = evaluator(model, test_iter, loss_fn, device)
                 
                 train_losses.append(train_l)
                 test_losses.append(test_l)
@@ -248,6 +251,12 @@ class AutoRecStreamlitUI:
                 progress = (epoch + 1) / num_epochs
                 progress_bar.progress(progress)
                 status_text.text(f"Epoch {epoch + 1}/{num_epochs} - Train Loss: {train_l:.4f}, Test RMSE: {rmse:.4f}")
+                
+                if rmse is not None:
+                    early_stopper(rmse)
+                    if early_stopper.early_stop:
+                        print(f"Early stopping triggered at epoch {epoch + 1}")
+                        break
 
             progress_bar.empty()
             status_text.empty()

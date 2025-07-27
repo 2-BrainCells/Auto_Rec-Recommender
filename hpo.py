@@ -3,7 +3,7 @@ import yaml
 import torch
 from preprocessing import read_data, split_data, load_data, device
 from autorec import ARDataset, DataLoader, AutoRec
-from utils import optim, nn, evaluator, train_ranking, EarlyStoppingCallback
+from utils import optim, nn, evaluator, train_ranking, EarlyStopping
 import optuna
 from optuna.trial import TrialState
 import optuna.visualization as vis
@@ -142,7 +142,7 @@ def run():
     Returns:
         Dictionary of best hyperparameters found during optimization
     """
-    early_stopping = EarlyStoppingCallback()
+    early_stopping = EarlyStopping()
     study = optuna.create_study(study_name="AutoRec HPO", direction='minimize')
     study.optimize(objective, n_trials=100, callbacks=[early_stopping])
 
