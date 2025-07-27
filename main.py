@@ -78,7 +78,8 @@ def auto_rec_runner():
         num_epochs=num_epochs,
         device=device,
         evaluator=evaluator,
-        inter_mat=test_inter_mat
+        inter_mat=test_inter_mat,
+        early_stopping_patience=7,
     )
 
     plt.figure(figsize=(8, 6))

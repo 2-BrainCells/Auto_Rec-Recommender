@@ -444,7 +444,7 @@ class AutoRecStreamlitUI:
                         'Rating': data['rating']
                     }
                     for category, data in preferences.items()
-                    if data['rating'] > 3
+                    if data['rating'] > 2
                 ])
                 if not pref_df.empty:
                     st.dataframe(pref_df, hide_index=True)
@@ -571,7 +571,7 @@ class AutoRecStreamlitUI:
         impact_data = []
 
         for category, data in preferences.items():
-            if data['rating'] > 3:
+            if data['rating'] > 2:
                 matching_recs = len([item for item in rec_items if item in data['item_ids']])
                 if matching_recs > 0:
                     impact_data.append({

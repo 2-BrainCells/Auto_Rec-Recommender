@@ -8,6 +8,44 @@ from preprocessing import device
 import matplotlib.pyplot as plt
 from sklearn.metrics.pairwise import cosine_similarity
 
+class EarlyStoppingCallback:
+    """
+    Early stopping callback for Optuna optimization to prevent overfitting.
+    Monitors improvement in objective value and stops if no progress is made.
+    """
+    
+    def __init__(self, patience=5, min_delta=0.0):
+        """
+        Initialize early stopping parameters.
+        
+        Args:
+            patience: Number of trials to wait without improvement
+            min_delta: Minimum change required to qualify as improvement
+        """
+        self.patience = patience
+        self.min_delta = min_delta
+        self.best_value = float('inf')
+        self.no_improvement_count = 0
+
+    def __call__(self, study, trial):
+        """
+        Check if optimization should be stopped based on recent progress.
+        
+        Args:
+            study: Optuna study object
+            trial: Current trial object
+        """
+        current_value = study.best_value
+        if current_value < self.best_value - self.min_delta:
+            self.best_value = current_value
+            self.no_improvement_count = 0
+        else:
+            self.no_improvement_count += 1
+
+        if self.no_improvement_count >= self.patience:
+            study.stop()
+
+
 def masked_loss(predictions, targets, mask, loss_fn=nn.MSELoss(reduction='none')):
     """
     Compute masked loss between predicted and target values for sparse matrices.
@@ -40,14 +78,14 @@ def evaluator(net, test_data, inter_matrix, loss_fn, device=device):
 
     return loss, rmse
 
-def train_ranking(net, train_iter, test_iter, loss_fn, optimizer, num_epochs, device=None, evaluator=None, inter_mat=None):
+def train_ranking(net, train_iter, test_iter, loss_fn, optimizer, num_epochs, device=None, evaluator=None, inter_mat=None, early_stopping_patience=5):
     """
     Train AutoRec model using masked loss with evaluation tracking.
     Performs complete training loop with loss monitoring and evaluation.
     """
     net.train()
     train_loss, test_loss, test_rmse = [], [], []
-
+    early_stopper = EarlyStoppingCallback(patience=early_stopping_patience, min_delta=1e-4)
     for epoch in range(num_epochs):
         total_loss = 0.0
         for batch, mask in train_iter:
@@ -71,6 +109,12 @@ def train_ranking(net, train_iter, test_iter, loss_fn, optimizer, num_epochs, de
         test_rmse.append(rmse)
 
         print(f"Epoch {epoch + 1}/{num_epochs}, Train Loss: {train_l:.3f}, Test Loss: {test_l:.3f}, Test RMSE: {rmse:.3f}")
+        
+        if rmse is not None:
+            early_stopper(rmse)
+            if early_stopper.early_stop:
+                print(f"Early stopping triggered at epoch {epoch + 1}")
+                break
 
     return train_loss, test_loss, test_rmse
 

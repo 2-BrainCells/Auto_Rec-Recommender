@@ -3,7 +3,7 @@ import yaml
 import torch
 from preprocessing import read_data, split_data, load_data, device
 from autorec import ARDataset, DataLoader, AutoRec
-from utils import optim, nn, evaluator, train_ranking
+from utils import optim, nn, evaluator, train_ranking, EarlyStoppingCallback
 import optuna
 from optuna.trial import TrialState
 import optuna.visualization as vis
@@ -89,42 +89,6 @@ def objective(trial):
           f"split={split:.3f}, final_rmse={test_rmse[-1]:.6f}")
 
     return test_rmse[-1]
-
-class EarlyStoppingCallback:
-    """
-    Early stopping callback for Optuna optimization to prevent overfitting.
-    Monitors improvement in objective value and stops if no progress is made.
-    """
-    
-    def __init__(self, patience=5, min_delta=0.001):
-        """
-        Initialize early stopping parameters.
-        
-        Args:
-            patience: Number of trials to wait without improvement
-            min_delta: Minimum change required to qualify as improvement
-        """
-        self.patience = patience
-        self.min_delta = min_delta
-        self.best_value = float('inf')
-        self.no_improvement_count = 0
-
-    def __call__(self, study, trial):
-        """
-        Check if optimization should be stopped based on recent progress.
-        
-        Args:
-            study: Optuna study object
-            trial: Current trial object
-        """
-        if study.best_value < self.best_value - self.min_delta:
-            self.best_value = study.best_value
-            self.no_improvement_count = 0
-        else:
-            self.no_improvement_count += 1
-
-        if self.no_improvement_count >= self.patience:
-            study.stop()
 
 def create_config_yaml(best_params):
     """
