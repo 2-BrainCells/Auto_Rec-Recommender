@@ -198,7 +198,7 @@ class AutoRecStreamlitUI:
         try:
             st.info(f"Starting training with parameters: {training_params}")
             
-            train_data, test_data = split_data(df, training_params.get('split', 0.2))
+            train_data, val_data, test_data = split_data(df, training_params.get('split', 0.2))
             _, _, _, train_inter_mat = load_data(train_data, num_users, num_items)
             _, _, _, test_inter_mat = load_data(test_data, num_users, num_items)
 
@@ -223,7 +223,7 @@ class AutoRecStreamlitUI:
             progress_bar = st.progress(0)
             status_text = st.empty()
             
-            early_stopper = EarlyStopping(patience=7, min_delta=1e-4)      
+            early_stopper = EarlyStopping(patience=5, min_delta=1e-4)      
 
             train_losses = []
             test_losses = []
@@ -497,7 +497,7 @@ class AutoRecStreamlitUI:
             if user_type == "New User":
                 if user_input["type"] == "preferences":
                     meaningful_prefs = {k: v for k, v in user_input["data"].items()
-                                        if v['rating'] != 3}
+                                        if v['rating'] != 2}
 
                     if meaningful_prefs:
                         recommendations = generate_preference_based_recommendations(

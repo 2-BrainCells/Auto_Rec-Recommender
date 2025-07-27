@@ -46,8 +46,10 @@ def split_data(data, test_ratio=0.1):
     Returns:
         Tuple of (train_data, test_data)
     """
-    train_data, test_data = train_test_split(data, test_size=test_ratio, random_state=42)
-    return train_data, test_data
+    train_data, temp_data = train_test_split(data, test_size=test_ratio, random_state=42)
+    val_data, test_data = train_test_split(temp_data, test_size=0.5, random_state=42)
+    
+    return train_data, val_data, test_data
 
 def load_data(data, num_users, num_items):
     """

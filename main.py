@@ -40,7 +40,7 @@ def auto_rec_runner():
     df, num_users, num_items = read_data()
     print(df.shape, num_users, num_items)
 
-    train_data, test_data = split_data(df, best_params['split'])
+    train_data, val_data, test_data = split_data(df, best_params['split'])
     _, _, _, train_inter_mat = load_data(train_data, num_users, num_items)
     _, _, _, test_inter_mat = load_data(test_data, num_users, num_items)
 

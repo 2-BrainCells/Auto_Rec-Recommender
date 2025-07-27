@@ -25,6 +25,25 @@ class EarlyStopping:
             if self.counter >= self.patience:
                 self.early_stop = True
 
+class OptunaEarlyStoppingCallback:
+    def __init__(self, patience=5, min_delta=0.0):
+        self.patience = patience
+        self.min_delta = min_delta
+        self.best_value = float('inf')
+        self.no_improvement_count = 0
+
+    def __call__(self, study, trial):
+        current_best = study.best_value
+        if current_best < self.best_value - self.min_delta:
+            self.best_value = current_best
+            self.no_improvement_count = 0
+        else:
+            self.no_improvement_count += 1
+        if self.no_improvement_count >= self.patience:
+            print(f"[OptunaEarlyStoppingCallback] Early stopping triggered after {self.patience} trials.")
+            study.stop()
+
+
 def masked_loss(predictions, targets, mask, loss_fn=nn.MSELoss(reduction='none')):
     """
     Compute masked loss between predicted and target values for sparse matrices.
