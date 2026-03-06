@@ -69,7 +69,7 @@ def auto_rec_runner():
     optimizer = optim.Adam(net.parameters(), lr=best_params["lr"], weight_decay=best_params["weight_decay"])
     loss_fn = nn.MSELoss()
 
-    train_loss, test_loss, test_rmse = train_ranking(
+    train_loss, test_loss, test_rmse, test_recall, test_ndcg = train_ranking(
         net=net,
         train_iter=train_iter,
         test_iter=test_iter,
@@ -78,7 +78,8 @@ def auto_rec_runner():
         num_epochs=num_epochs,
         device=device,
         evaluator=evaluator,
-        inter_mat=test_inter_mat,
+        train_matrix=train_inter_mat,
+        test_matrix=test_inter_mat,
         early_stopping_patience=7,
     )
 

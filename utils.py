@@ -76,48 +76,78 @@ def masked_loss(predictions, targets, mask, loss_fn=nn.MSELoss(reduction='none')
 
 #     return loss, rmse
 
-def evaluator(net, test_data, loss_fn, device=device):
+def evaluator(net, train_matrix, test_matrix, loss_fn, device=device, k=5):
     """
-    Evaluate trained AutoRec model performance on test data.
-    Computes test loss and RMSE metrics for model validation.
-    Both metrics are calculated over the same observed (masked) ratings.
+    Evaluate trained AutoRec model performance.
+    INPUT: train_matrix (what the model knows)
+    TARGET: test_matrix (what the model is trying to guess)
     """
     net.eval()
-    all_preds = []
-    all_trues = []
-    all_masks = []
+    all_recall, all_ndcg = [], []
     total_loss = 0.0
+    valid_users = 0
+
+    # Convert to tensors
+    train_tensor = torch.tensor(train_matrix, dtype=torch.float32).to(device)
+    test_tensor = torch.tensor(test_matrix, dtype=torch.float32).to(device)
+    test_mask = (~(test_tensor <= 0)).float().to(device)
 
     with torch.no_grad():
-        for values, mask in test_data:
-            values, mask = values.to(device), mask.to(device)
-            preds = net(values)
-            all_preds.append(preds.cpu().numpy())
-            all_trues.append(values.cpu().numpy())
-            all_masks.append(mask.cpu().numpy())
-            loss = masked_loss(preds, values, mask, loss_fn)
-            total_loss += loss.item()
+        # Input the PAST (train), predict the FUTURE (test)
+        preds = net(train_tensor)
+        
+        # Calculate loss ONLY on the hidden test items
+        loss = masked_loss(preds, test_tensor, test_mask, loss_fn)
+        total_loss = loss.item()
+        
+        preds_np = preds.cpu().numpy()
+        trues_np = test_tensor.cpu().numpy()
+        masks_np = test_mask.cpu().numpy()
+        train_np = train_matrix
 
-    preds = np.concatenate(all_preds, axis=0)
-    trues = np.concatenate(all_trues, axis=0)
-    masks = np.concatenate(all_masks, axis=0)
+        # Calculate Ranking Metrics
+        for i in range(preds_np.shape[0]):
+            user_pred = preds_np[i].copy()
+            user_true = trues_np[i]
+            user_mask = masks_np[i]
+            
+            # Mask out items the user already interacted with in training
+            user_pred[train_np[i] > 0] = -999.0
+            
+            # Relevant items are test items rated >= 0.6 (3 out of 5)
+            relevant_items = np.where((user_true >= 0.6) & (user_mask == 1))[0].tolist()
+            
+            if not relevant_items:
+                continue  
+                
+            valid_users += 1
+            top_k_indices = np.argsort(user_pred)[-k:][::-1].tolist()
+            recommended_items = [(item, user_pred[item]) for item in top_k_indices]
+            
+            all_recall.append(calculate_recall_at_k(recommended_items, relevant_items, k))
+            all_ndcg.append(calculate_ndcg_at_k(recommended_items, relevant_items, k))
 
-    # Compute masked RMSE over all observed entries
-    mse = np.sum(((preds - trues) ** 2) * masks) / np.sum(masks)
+    # Calculate global RMSE over the test mask
+    mse = np.sum(((preds_np - trues_np) ** 2) * masks_np) / (np.sum(masks_np) + 1e-10)
     rmse = np.sqrt(mse)
+    
+    avg_recall = np.mean(all_recall) if all_recall else 0.0
+    avg_ndcg = np.mean(all_ndcg) if all_ndcg else 0.0
 
-    avg_loss = total_loss / len(test_data)
-    return avg_loss, rmse
+    return total_loss, rmse, avg_recall, avg_ndcg
 
 
-def train_ranking(net, train_iter, test_iter, loss_fn, optimizer, num_epochs, device=None, evaluator=None, inter_mat=None, early_stopping_patience=5):
+def train_ranking(net, train_iter, test_iter, loss_fn, optimizer, num_epochs, device=None, evaluator=None, train_matrix=None, test_matrix=None, early_stopping_patience=5):
     """
     Train AutoRec model using masked loss with evaluation tracking.
-    Performs complete training loop with loss monitoring and evaluation.
     """
     net.train()
-    train_loss, test_loss, test_rmse = [], [], []
+    train_loss, test_loss, test_rmse, test_recall, test_ndcg = [], [], [], [], []
+    
+    # We want to early-stop on NDCG now. Since EarlyStopping usually looks for a drop,
+    # and we want NDCG to go UP, we will feed it negative NDCG later.
     early_stopper = EarlyStopping(patience=early_stopping_patience, min_delta=1e-4)
+    
     for epoch in range(num_epochs):
         total_loss = 0.0
         for batch, mask in train_iter:
@@ -131,24 +161,31 @@ def train_ranking(net, train_iter, test_iter, loss_fn, optimizer, num_epochs, de
 
         train_l = total_loss / len(train_iter)
 
-        if evaluator:
-            test_l, rmse = evaluator(net, test_iter, loss_fn, device)
+        # Ensure both matrices exist before passing them to the evaluator
+        if evaluator and train_matrix is not None and test_matrix is not None:
+            test_l, rmse, recall, ndcg = evaluator(net, train_matrix, test_matrix, loss_fn, device)
         else:
-            test_l, rmse = None, None
+            test_l, rmse, recall, ndcg = None, None, None, None
 
         train_loss.append(train_l)
         test_loss.append(test_l)
         test_rmse.append(rmse)
-
-        print(f"Epoch {epoch + 1}/{num_epochs}, Train Loss: {train_l:.3f}, Test Loss: {test_l:.3f}, Test RMSE: {rmse:.3f}")
         
-        if rmse is not None:
-            early_stopper(rmse)
+        if recall is not None:
+            test_recall.append(recall)
+            test_ndcg.append(ndcg)
+
+        print(f"Epoch {epoch + 1}/{num_epochs} | Train Loss: {train_l:.3f} | Test Loss: {test_l:.3f} | Test RMSE: {rmse:.3f} | Recall@5: {recall:.3f} | NDCG@5: {ndcg:.3f}")
+        
+        if ndcg is not None:
+            # We pass negative NDCG because the EarlyStopper stops when values stop dropping.
+            # We want it to stop when NDCG stops RISING (i.e., when -ndcg stops dropping).
+            early_stopper(-ndcg)
             if early_stopper.early_stop:
                 print(f"Early stopping triggered at epoch {epoch + 1}")
                 break
 
-    return train_loss, test_loss, test_rmse
+    return train_loss, test_loss, test_rmse, test_recall, test_ndcg
 
 def load_and_use_config(config_path="Auto_Rec_best_params"):
     """
@@ -238,11 +275,13 @@ def generate_autorec_recommendations(model, interaction_matrix, device,
 
 def display_recommendations(recommendations, title="Recommendations"):
     """
-    Display formatted recommendation results.
+    Display formatted recommendation results, scaled back to reality.
     """
     print(f"\n=== {title} ===")
     for i, (item_id, score) in enumerate(recommendations, 1):
-        print(f"{i}. Item {item_id}: {score:.4f}")
+        # Multiply by 5.0 to scale from 0.0-1.0 back up to 0.0-5.0
+        real_score = min(5.0, max(0.0, score * 5.0)) 
+        print(f"{i}. Item {item_id}: {real_score:.2f} / 5.0")
 
 class PreferenceBasedPredictor:
     """
@@ -280,7 +319,7 @@ class PreferenceBasedPredictor:
         """
         Find users with similar preferences using cosine similarity.
         """
-        similarities = cosine_similarity([preference_profile], self.interaction_matrix)[0]
+        similarities = cosine_similarity(preference_profile.reshape(1, -1), self.interaction_matrix)[0]
         valid_users = np.where(similarities >= min_similarity)[0]
 
         if len(valid_users) == 0:
@@ -447,3 +486,35 @@ def compute_recommendation_novelty(recommendations, interaction_matrix):
             novelty_scores.append(novelty)
     
     return np.mean(novelty_scores) if novelty_scores else 0.0
+
+def calculate_recall_at_k(recommended_items, relevant_items, k=5):
+    """
+    Calculates the proportion of relevant items found in the top-K recommendations.
+    """
+    if not relevant_items:
+        return 0.0
+    
+    top_k_recs = [item for item, _ in recommended_items[:k]]
+    hits = len(set(top_k_recs).intersection(set(relevant_items)))
+    
+    return hits / len(relevant_items)
+
+def calculate_ndcg_at_k(recommended_items, relevant_items, k=5):
+    """
+    Calculates Normalized Discounted Cumulative Gain at K.
+    Rewards the model more if relevant items appear higher up the ranked list.
+    """
+    if not relevant_items:
+        return 0.0
+        
+    top_k_recs = [item for item, _ in recommended_items[:k]]
+    
+    dcg = 0.0
+    for i, item in enumerate(top_k_recs):
+        if item in relevant_items:
+            dcg += 1.0 / np.log2(i + 2)  # i+2 because rank starts at 1, and log2(1) is 0
+            
+    # Calculate Ideal DCG (if all relevant items were at the top)
+    idcg = sum(1.0 / np.log2(i + 2) for i in range(min(k, len(relevant_items))))
+    
+    return dcg / idcg if idcg > 0 else 0.0

@@ -33,10 +33,10 @@ class ConfigManager:
             },
             'hyperparameters': {
                 'hidden_dim': 512,
-                'lr': 0.001,
+                'lr': 0.000299,
                 'weight_decay': 0.0001,
-                'batch_size': 64,
-                'split': 0.2,
+                'batch_size': 256,
+                'split': 0.1588,
                 'dropout': 0.2
             },
             'training': {

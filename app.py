@@ -228,6 +228,7 @@ class AutoRecStreamlitUI:
             train_losses = []
             test_losses = []
             test_rmses = []
+            test_ndcgs = [] 
 
             for epoch in range(num_epochs):
                 model.train()
@@ -242,18 +243,23 @@ class AutoRecStreamlitUI:
                     total_loss += loss.item()
 
                 train_l = total_loss / len(train_iter)
-                test_l, rmse = evaluator(model, test_iter, loss_fn, device)
+                
+                # FIXED: Pass train_inter_mat and test_inter_mat to the new evaluator
+                test_l, rmse, recall, ndcg = evaluator(model, train_inter_mat, test_inter_mat, loss_fn, device)
                 
                 train_losses.append(train_l)
                 test_losses.append(test_l)
                 test_rmses.append(rmse)
+                test_ndcgs.append(ndcg)
 
                 progress = (epoch + 1) / num_epochs
                 progress_bar.progress(progress)
-                status_text.text(f"Epoch {epoch + 1}/{num_epochs} - Train Loss: {train_l:.4f}, Test RMSE: {rmse:.4f}")
+                # Update Streamlit UI to show the true ranking score
+                status_text.text(f"Epoch {epoch + 1}/{num_epochs} | RMSE: {rmse:.3f} | NDCG@5: {ndcg:.3f}")
                 
-                if rmse is not None:
-                    early_stopper(rmse)
+                if ndcg is not None:
+                    # Early stop based on NDCG maximizing (feed negative to minimize-based early stopper)
+                    early_stopper(-ndcg)
                     if early_stopper.early_stop:
                         print(f"Early stopping triggered at epoch {epoch + 1}")
                         break
@@ -261,7 +267,7 @@ class AutoRecStreamlitUI:
             progress_bar.empty()
             status_text.empty()
 
-            st.success(f"✅ Training completed! Final RMSE: {test_rmses[-1]:.4f}")
+            st.success(f"✅ Training completed! Final NDCG@5: {test_ndcgs[-1]:.4f}")
             return model, test_inter_mat, train_losses, test_losses, test_rmses
 
         except Exception as e:

@@ -72,7 +72,8 @@ def objective(trial):
     num_epochs = 50
 
     with HiddenPrints():
-        _, _, val_rmse = train_ranking(
+        # Catch all 5 returns
+        _, _, _, _, val_ndcg = train_ranking(
             net=net,
             train_iter=train_iter,
             test_iter=val_iter,
@@ -81,14 +82,16 @@ def objective(trial):
             num_epochs=num_epochs,
             device=device,
             evaluator=evaluator,
-            inter_mat=val_inter_mat
+            train_matrix=train_inter_mat,  # <--- Pass Train Matrix
+            test_matrix=val_inter_mat      # <--- Pass Test Matrix
         )
 
     print(f"Trial {trial.number}: hidden_dim={hidden_dim}, lr={lr:.6f}, "
           f"weight_decay={weight_decay:.6f}, batch_size={batch_size}, "
-          f"split={split:.3f}, final_rmse={val_rmse[-1]:.6f}")
+          f"split={split:.3f}, final_ndcg={val_ndcg[-1]:.6f}")
 
-    return val_rmse[-1]
+    # Return negative NDCG so Optuna's 'minimize' direction finds the highest NDCG
+    return -val_ndcg[-1]
 
 def create_config_yaml(best_params):
     """
