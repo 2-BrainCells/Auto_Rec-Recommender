@@ -200,83 +200,40 @@ class AutoRecStreamlitUI:
     @st.cache_resource
     def train_model(_self, df, num_users, num_items, training_params, num_epochs=20):
         try:
-            st.info(f"Starting training with parameters: {training_params}")
-            
             train_data, val_data, test_data = split_data(df, training_params.get('split', 0.2))
             _, _, _, train_inter_mat = load_data(train_data, num_users, num_items)
             _, _, _, test_inter_mat = load_data(test_data, num_users, num_items)
 
-            st.info(f"Data split complete. Training matrix shape: {train_inter_mat.shape}")
+            train_iter = DataLoader(ARDataset(train_inter_mat), batch_size=training_params.get('batch_size', 64), shuffle=True)
+            test_iter = DataLoader(ARDataset(test_inter_mat), batch_size=training_params.get('batch_size', 64), shuffle=False)
 
-            train_dataset = ARDataset(train_inter_mat)
-            test_dataset = ARDataset(test_inter_mat)
-
-            batch_size = training_params.get('batch_size', 64)
-            train_iter = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0)
-            test_iter = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
-
-            hidden_dim = training_params.get('hidden_dim', 512)
-            model = AutoRec(hidden_dim, num_items).to(device)
-            st.info(f"Model initialized with hidden_dim: {hidden_dim}")
-
-            lr = training_params.get('lr', 0.001)
-            weight_decay = training_params.get('weight_decay', 1e-4)
-            optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
-            loss_fn = nn.MSELoss()
-
+            model = AutoRec(training_params.get('hidden_dim', 32), num_items).to(device)
+            optimizer = optim.Adam(model.parameters(), lr=training_params.get('lr', 0.001), weight_decay=training_params.get('weight_decay', 1e-4))
+            
             progress_bar = st.progress(0)
             status_text = st.empty()
             
-            early_stopper = EarlyStopping(patience=5, min_delta=1e-4)      
+            # --- THE CALLBACK: Hooks utils.py training directly into the Streamlit UI ---
+            def ui_updater(current_epoch, total_epochs, rmse, ndcg):
+                progress_bar.progress(current_epoch / total_epochs)
+                status_text.text(f"Epoch {current_epoch}/{total_epochs} | RMSE: {rmse:.3f} | NDCG@5: {ndcg:.3f}")
 
-            train_losses = []
-            test_losses = []
-            test_rmses = []
-            test_ndcgs = [] 
-
-            for epoch in range(num_epochs):
-                model.train()
-                total_loss = 0.0
-                for batch, mask in train_iter:
-                    batch, mask = batch.to(device), mask.to(device)
-                    optimizer.zero_grad()
-                    predictions = model(batch)
-                    loss = masked_loss(predictions, batch, mask, loss_fn)
-                    loss.backward()
-                    optimizer.step()
-                    total_loss += loss.item()
-
-                train_l = total_loss / len(train_iter)
-                
-                # FIXED: Pass train_inter_mat and test_inter_mat to the new evaluator
-                test_l, rmse, recall, ndcg, _, _, _ = evaluator(model, train_inter_mat, test_inter_mat, loss_fn, device)
-                
-                train_losses.append(train_l)
-                test_losses.append(test_l)
-                test_rmses.append(rmse)
-                test_ndcgs.append(ndcg)
-
-                progress = (epoch + 1) / num_epochs
-                progress_bar.progress(progress)
-                # Update Streamlit UI to show the true ranking score
-                status_text.text(f"Epoch {epoch + 1}/{num_epochs} | RMSE: {rmse:.3f} | NDCG@5: {ndcg:.3f}")
-                
-                if ndcg is not None:
-                    # Early stop based on NDCG maximizing (feed negative to minimize-based early stopper)
-                    early_stopper(-ndcg)
-                    if early_stopper.early_stop:
-                        print(f"Early stopping triggered at epoch {epoch + 1}")
-                        break
+            metrics = train_ranking(
+                net=model, train_iter=train_iter, test_iter=test_iter, loss_fn=nn.MSELoss(), 
+                optimizer=optimizer, num_epochs=num_epochs, device=device, 
+                evaluator=evaluator, train_matrix=train_inter_mat, test_matrix=test_inter_mat,
+                ui_callback=ui_updater # Pass the UI hook
+            )
 
             progress_bar.empty()
             status_text.empty()
-
-            st.success(f"✅ Training completed! Final NDCG@5: {test_ndcgs[-1]:.4f}")
-            return model, test_inter_mat, train_losses, test_losses, test_rmses
+            st.success(f"✅ Training completed! Final NDCG: {metrics[4][-1]:.4f}")
+            
+            # Return model, matrix, train_losses, test_losses, rmses
+            return model, test_inter_mat, metrics[0], metrics[1], metrics[2]
 
         except Exception as e:
             st.error(f"❌ Error training model: {str(e)}")
-            st.exception(e)
             return None, None, [], [], []
 
     def plot_training_curves(self, train_losses, test_losses, test_rmses):
@@ -515,7 +472,6 @@ class AutoRecStreamlitUI:
                             interaction_matrix=self.interaction_matrix,
                             device=device,
                             preferences=user_input["data"],
-                            top_k=10
                         )
                         st.success("🎯 Recommendations based on your preferences!")
                         self.show_preference_impact(user_input["data"], recommendations)
@@ -526,7 +482,6 @@ class AutoRecStreamlitUI:
                             device=device,
                             user_id=None,
                             new_user_method='popularity',
-                            top_k=10
                         )
                         st.info("📈 Popular items (no specific preferences detected)")
                 else:
@@ -536,7 +491,6 @@ class AutoRecStreamlitUI:
                         device=device,
                         user_id=None,
                         new_user_method='popularity',
-                        top_k=10
                     )
             else:
                 recommendations = generate_autorec_recommendations(
@@ -544,7 +498,6 @@ class AutoRecStreamlitUI:
                     interaction_matrix=self.interaction_matrix,
                     device=device,
                     user_id=user_input["data"],
-                    top_k=10
                 )
 
             return recommendations
@@ -719,112 +672,55 @@ class AutoRecStreamlitUI:
 
     def run(self):
         st.title("🎯 AutoRec Recommendation System")
-        st.markdown("**Upload your data, optimize/train the model, and get personalized recommendations!**")
+        st.markdown("**Upload your data, configure parameters, and train the model.**")
         st.markdown("---")
 
         uploaded_file, optimization_settings, user_type = self.render_sidebar()
 
         if uploaded_file is not None:
-            with st.spinner("Processing uploaded data..."):
+            with st.spinner("Processing data..."):
                 df, num_users, num_items = self.process_uploaded_data(uploaded_file)
 
             if df is not None:
                 self.num_users = num_users
                 self.num_items = num_items
 
-                st.subheader("🔍 Hyperparameter Configuration")
-                training_params = None
+                st.subheader("⚙️ Workflow Configuration")
+                col1, col2 = st.columns(2)
+                
+                # Clean Action Buttons
+                with col1:
+                    run_hpo_btn = st.button("🔍 Run New Hyperparameter Optimization", use_container_width=True)
+                with col2:
+                    train_btn = st.button("🚀 Train Model with Current Config", type="primary", use_container_width=True)
 
-                if optimization_settings['use_existing_hpo'] and not optimization_settings['force_new_hpo']:
-                    existing_params = self.check_hpo_config()
-                    if existing_params:
-                        training_params = existing_params
-                        st.info("✅ Using existing HPO configuration for training.")
+                training_params = self.check_hpo_config() if not run_hpo_btn else None
 
-                if training_params is None:
-                    if optimization_settings['force_new_hpo'] or st.button("🚀 Run Hyperparameter Optimization", type="primary"):
-                        training_params = self.run_hyperparameter_optimization(df, num_users, num_items)
-                    elif optimization_settings['manual_params']:
-                        training_params = optimization_settings['manual_params']
-                        st.info("📝 Using manual parameters for training.")
+                if run_hpo_btn:
+                    training_params = self.run_hyperparameter_optimization(df, num_users, num_items)
 
-                if training_params:
-                    st.subheader("🤖 Model Training")
-
-                    auto_train_after_hpo = st.checkbox(
-                        "Auto-train after HPO",
-                        value=True,
-                        help="Automatically train model after hyperparameter optimization"
-                    )
-
-                    should_train = False
-                    if auto_train_after_hpo and not self.trained:
-                        should_train = True
-                        st.info("🚀 Auto-training model with optimized parameters...")
-                    elif st.button("Train Model", type="primary"):
-                        should_train = True
-
-                    if should_train:
-                        with st.spinner("Training AutoRec model..."):
-                            self.model, self.interaction_matrix, train_losses, test_losses, test_rmses = self.train_model(
-                                df, num_users, num_items, training_params, optimization_settings['num_epochs']
-                            )
-
-                        if self.model is not None:
+                if train_btn and training_params:
+                    with st.spinner("Training AutoRec model..."):
+                        self.model, self.interaction_matrix, train_losses, test_losses, test_rmses = self.train_model(
+                            df, num_users, num_items, training_params, optimization_settings['num_epochs']
+                        )
+                        
+                        if self.model:
                             self.trained = True
-                            st.success("✅ Model trained successfully!")
-
-                            st.subheader("📈 Training Progress")
+                            st.session_state.trained = True
                             self.plot_training_curves(train_losses, test_losses, test_rmses)
 
-                            st.session_state.model = self.model
-                            st.session_state.interaction_matrix = self.interaction_matrix
-                            st.session_state.num_users = self.num_users
-                            st.session_state.num_items = self.num_items
-                            st.session_state.trained = True
-                        else:
-                            st.error("❌ Model training failed!")
-
-                    if 'trained' in st.session_state and st.session_state.trained:
-                        self.model = st.session_state.model
-                        self.interaction_matrix = st.session_state.interaction_matrix
-                        self.num_users = st.session_state.num_users
-                        self.num_items = st.session_state.num_items
-                        self.trained = True
-                        st.success("✅ Trained model loaded from session!")
-
-                    if training_params:
-                        st.markdown("---")
-                        self.show_training_status()
-
-                    if self.trained:
-                        st.markdown("---")
-                        st.subheader("🎯 Generate Recommendations")
-                        user_input = self.render_user_input(user_type)
-
-                        if st.button("Generate Recommendations", type="secondary"):
-                            with st.spinner("Generating recommendations..."):
-                                recommendations = self.generate_recommendations(user_input, user_type)
-                                self.display_recommendations_ui(recommendations, user_type, user_input)
-                                
-                            # NEW: Add a button to render the Latent Space map
-                        st.markdown("---")
-                        if st.button("🌌 Visualize Latent Space Clusters", type="secondary"):
-                            self.visualize_latent_space()
-                            
-                    else:
-                        st.info("👆 Please train the model to generate recommendations.")
-                else:
-                    st.info("🔧 Please configure hyperparameters (run HPO or set manual parameters) before training.")
+                if getattr(self, 'trained', False) or st.session_state.get('trained', False):
+                    st.markdown("---")
+                    user_input = self.render_user_input(user_type)
+                    if st.button("Generate Recommendations", type="secondary"):
+                        recs = self.generate_recommendations(user_input, user_type)
+                        self.display_recommendations_ui(recs, user_type, user_input)
+                        
+                    if st.button("🌌 Visualize Latent Space Clusters"):
+                        self.visualize_latent_space()
         else:
             st.info("📁 Please upload a CSV file to get started.")
-
-            st.subheader("📋 Expected CSV Format")
-            st.markdown("""
-            Your CSV file should have:
-            - Rows: Individual users
-            - Missing values: Use 'NC', 'NSU', or leave blank
-            """)
 
 if __name__ == "__main__":
     app = AutoRecStreamlitUI()

@@ -7,7 +7,9 @@ import numpy as np
 from preprocessing import device
 import matplotlib.pyplot as plt
 from sklearn.metrics.pairwise import cosine_similarity
+from config import SETTINGS
 
+# --- Core Logic ---
 class EarlyStopping:
     def __init__(self, patience=5, min_delta=0.0):
         self.patience = patience
@@ -25,145 +27,66 @@ class EarlyStopping:
             if self.counter >= self.patience:
                 self.early_stop = True
 
-class OptunaEarlyStoppingCallback:
-    def __init__(self, patience=5, min_delta=0.0):
-        self.patience = patience
-        self.min_delta = min_delta
-        self.best_value = float('inf')
-        self.no_improvement_count = 0
-
-    def __call__(self, study, trial):
-        current_best = study.best_value
-        if current_best < self.best_value - self.min_delta:
-            self.best_value = current_best
-            self.no_improvement_count = 0
-        else:
-            self.no_improvement_count += 1
-        if self.no_improvement_count >= self.patience:
-            print(f"[OptunaEarlyStoppingCallback] Early stopping triggered after {self.patience} trials.")
-            study.stop()
-
-
 def masked_loss(predictions, targets, mask, loss_fn=nn.MSELoss(reduction='none')):
-    """
-    Compute masked loss between predicted and target values for sparse matrices.
-    Only considers non-zero entries in the mask for loss calculation.
-    """
     loss = loss_fn(predictions, targets) * mask
-    return loss.sum() / mask.sum()
+    return loss.sum() / (mask.sum() + 1e-10)
 
-# def evaluator(net, test_data, inter_matrix, loss_fn, device=device):
-#     """
-#     Evaluate trained AutoRec model performance on test data.
-#     Computes test loss and RMSE metrics for model validation.
-#     """
-#     net.eval()
-#     scores = []
-#     total_loss = 0.0
-
-#     with torch.no_grad():
-#         for values, mask in test_data:
-#             values, mask = values.to(device), mask.to(device)
-#             preds = net(values)
-#             scores.append(preds.to('cpu').numpy())
-#             loss = masked_loss(preds, values, mask, loss_fn)
-#             total_loss += loss.item()
-
-#     recons = np.vstack(scores)
-#     inter_matrix = np.array(inter_matrix, dtype=np.float16)
-#     rmse = np.sqrt(np.sum(np.square(inter_matrix - np.sign(inter_matrix) * recons)) / np.sum(np.sign(inter_matrix)))
-#     loss = total_loss / len(test_data)
-
-#     return loss, rmse
-
-def evaluator(net, train_matrix, test_matrix, loss_fn, device=device, k=5):
-    """
-    Evaluate trained AutoRec model performance.
-    Calculates Loss, RMSE, Recall, NDCG, Diversity, Novelty, and Coverage.
-    """
+def evaluator(net, train_matrix, test_matrix, loss_fn, device=device, k=SETTINGS['evaluation']['top_k']):
     net.eval()
-    all_recall, all_ndcg = [], []
-    all_diversity, all_novelty = [], []
-    global_recommended_items = set() # To track overall catalog coverage
+    all_recall, all_ndcg, all_diversity, all_novelty = [], [], [], []
+    global_recommended_items = set()
     total_loss = 0.0
-    
     total_items = train_matrix.shape[1]
-
-    if torch.is_tensor(train_matrix):
-        train_matrix_np = train_matrix.cpu().numpy()
-    else:
-        train_matrix_np = np.array(train_matrix)
-
+    
+    train_matrix_np = train_matrix.cpu().numpy() if torch.is_tensor(train_matrix) else np.array(train_matrix)
     test_tensor = torch.tensor(test_matrix, dtype=torch.float32).to(device)
     test_mask = (~(test_tensor <= 0)).float().to(device)
     train_tensor = torch.tensor(train_matrix, dtype=torch.float32).to(device)
 
     with torch.no_grad():
         preds = net(train_tensor)
-        
         loss = masked_loss(preds, test_tensor, test_mask, loss_fn)
         total_loss = loss.item()
         
-        preds_np = preds.cpu().numpy()
-        trues_np = test_tensor.cpu().numpy()
-        masks_np = test_mask.cpu().numpy()
+        preds_np, trues_np, masks_np = preds.cpu().numpy(), test_tensor.cpu().numpy(), test_mask.cpu().numpy()
 
         for i in range(preds_np.shape[0]):
-            user_pred = preds_np[i].copy()
-            user_true = trues_np[i]
-            user_mask = masks_np[i]
+            user_pred, user_true, user_mask = preds_np[i].copy(), trues_np[i], masks_np[i]
+            user_pred[train_matrix_np[i] > 0] = -999.0 # Mask out training items
             
-            # Mask out training items
-            user_pred[train_matrix_np[i] > 0] = -999.0
-            
-            relevant_items = np.where((user_true >= 0.6) & (user_mask == 1))[0].tolist()
-            
-            if not relevant_items:
-                continue  
+            relevant_items = np.where((user_true >= SETTINGS['evaluation']['relevant_rating_threshold']) & (user_mask == 1))[0].tolist()
+            if not relevant_items: continue  
                 
             top_k_indices = np.argsort(user_pred)[-k:][::-1].tolist()
             recommended_items = [(item, user_pred[item]) for item in top_k_indices]
             
-            # Track for Coverage (Unique items recommended across ALL users)
-            for item, _ in recommended_items:
-                global_recommended_items.add(item)
+            for item, _ in recommended_items: global_recommended_items.add(item)
             
-            # Calculate metrics for this user
             all_recall.append(calculate_recall_at_k(recommended_items, relevant_items, k))
             all_ndcg.append(calculate_ndcg_at_k(recommended_items, relevant_items, k))
             all_diversity.append(calculate_recommendation_diversity(recommended_items, train_matrix_np))
             all_novelty.append(compute_recommendation_novelty(recommended_items, train_matrix_np))
 
-    mse = np.sum(((preds_np - trues_np) ** 2) * masks_np) / (np.sum(masks_np) + 1e-10)
-    rmse = np.sqrt(mse)
-    
-    avg_recall = np.mean(all_recall) if all_recall else 0.0
-    avg_ndcg = np.mean(all_ndcg) if all_ndcg else 0.0
-    avg_div = np.mean(all_diversity) if all_diversity else 0.0
-    avg_nov = np.mean(all_novelty) if all_novelty else 0.0
+    rmse = np.sqrt(np.sum(((preds_np - trues_np) ** 2) * masks_np) / (np.sum(masks_np) + 1e-10))
     coverage = len(global_recommended_items) / total_items if total_items > 0 else 0.0
 
-    return total_loss, rmse, avg_recall, avg_ndcg, avg_div, avg_nov, coverage
+    return total_loss, rmse, np.mean(all_recall) if all_recall else 0.0, np.mean(all_ndcg) if all_ndcg else 0.0, \
+           np.mean(all_diversity) if all_diversity else 0.0, np.mean(all_novelty) if all_novelty else 0.0, coverage
 
-
-def train_ranking(net, train_iter, test_iter, loss_fn, optimizer, num_epochs, device=None, evaluator=None, train_matrix=None, test_matrix=None, early_stopping_patience=5):
-    """
-    Train AutoRec model using masked loss with advanced evaluation tracking.
-    """
-    net.train()
-    train_loss, test_loss, test_rmse = [], [], []
-    test_recall, test_ndcg = [], []
-    test_div, test_nov, test_cov = [], [], [] # Arrays for advanced metrics
+def train_ranking(net, train_iter, test_iter, loss_fn, optimizer, num_epochs, device=device, 
+                  evaluator=None, train_matrix=None, test_matrix=None, early_stopping_patience=None, ui_callback=None):
     
-    early_stopper = EarlyStopping(patience=early_stopping_patience, min_delta=1e-4)
+    patience = early_stopping_patience or SETTINGS['training']['patience']
+    early_stopper = EarlyStopping(patience=patience, min_delta=1e-4)
+    history = {'train_loss': [], 'test_loss': [], 'rmse': [], 'recall': [], 'ndcg': [], 'div': [], 'nov': [], 'cov': []}
     
     for epoch in range(num_epochs):
+        net.train()
         total_loss = 0.0
         for batch, mask in train_iter:
             batch, mask = batch.to(device), mask.to(device)
             optimizer.zero_grad()
-            predictions = net(batch)
-            loss = masked_loss(predictions, batch, mask, loss_fn)
+            loss = masked_loss(net(batch), batch, mask, loss_fn)
             loss.backward()
             optimizer.step()
             total_loss += loss.item()
@@ -173,29 +96,27 @@ def train_ranking(net, train_iter, test_iter, loss_fn, optimizer, num_epochs, de
         if evaluator and train_matrix is not None and test_matrix is not None:
             test_l, rmse, recall, ndcg, div, nov, cov = evaluator(net, train_matrix, test_matrix, loss_fn, device)
         else:
-            test_l, rmse, recall, ndcg, div, nov, cov = [None]*7
+            test_l = rmse = recall = ndcg = div = nov = cov = 0.0
 
-        train_loss.append(train_l)
-        test_loss.append(test_l)
-        test_rmse.append(rmse)
-        
-        if recall is not None:
-            test_recall.append(recall)
-            test_ndcg.append(ndcg)
-            test_div.append(div)
-            test_nov.append(nov)
-            test_cov.append(cov)
+        history['train_loss'].append(train_l); history['test_loss'].append(test_l); history['rmse'].append(rmse)
+        history['recall'].append(recall); history['ndcg'].append(ndcg)
+        history['div'].append(div); history['nov'].append(nov); history['cov'].append(cov)
 
-        print(f"Epoch {epoch + 1}/{num_epochs} | RMSE: {rmse:.3f} | NDCG: {ndcg:.3f} | Div: {div:.3f} | Nov: {nov:.3f} | Cov: {cov:.3f}")
+        # UI Integration
+        k_val = SETTINGS['evaluation']['top_k']
+        if ui_callback:
+            ui_callback(epoch + 1, num_epochs, rmse, ndcg)
+        else:
+            print(f"Epoch {epoch + 1}/{num_epochs} | RMSE: {rmse:.3f} | Recall@{k_val}: {recall:.3f} | NDCG@{k_val}: {ndcg:.3f} | Div: {div:.3f} | Nov: {nov:.3f} | Cov: {cov:.3f}")
         
-        if ndcg is not None:
+        if ndcg > 0:
             early_stopper(-ndcg)
             if early_stopper.early_stop:
-                print(f"Early stopping triggered at epoch {epoch + 1}")
+                if not ui_callback: print(f"Early stopping at epoch {epoch + 1}")
                 break
 
-    # Return ALL tracked metrics
-    return train_loss, test_loss, test_rmse, test_recall, test_ndcg, test_div, test_nov, test_cov
+    return history['train_loss'], history['test_loss'], history['rmse'], history['recall'], history['ndcg'], history['div'], history['nov'], history['cov']
+
 
 def load_and_use_config(config_path="Auto_Rec_best_params"):
     """
@@ -220,7 +141,7 @@ class AutoRecPredictor:
         self.device = device
         self.model.eval()
 
-    def predict_existing_user(self, user_id, top_k=10):
+    def predict_existing_user(self, user_id, top_k=SETTINGS['evaluation']['top_k']):
         """
         Generate recommendations for existing user using AutoRec reconstruction.
         """
@@ -238,7 +159,7 @@ class AutoRecPredictor:
 
         return list(zip(recommended_items, predicted_scores))
 
-    def predict_new_user_popularity(self, top_k=10):
+    def predict_new_user_popularity(self, top_k=SETTINGS['evaluation']['top_k']):
         """
         Generate popularity-based recommendations for new users.
         """
@@ -251,7 +172,7 @@ class AutoRecPredictor:
 
         return list(zip(popular_indices, popular_scores))
 
-    def predict_new_user_average(self, top_k=10):
+    def predict_new_user_average(self, top_k=SETTINGS['evaluation']['top_k']):
         """
         Generate recommendations for new users using average user profile.
         """
@@ -267,7 +188,7 @@ class AutoRecPredictor:
         return list(zip(top_indices, predicted_scores))
 
 def generate_autorec_recommendations(model, interaction_matrix, device,
-                                     user_id=None, new_user_method='popularity', top_k=10):
+                                     user_id=None, new_user_method='popularity', top_k=SETTINGS['evaluation']['top_k']):
     """
     Generate recommendations using AutoRec model for existing or new users.
     """
@@ -340,7 +261,7 @@ class PreferenceBasedPredictor:
 
         return top_user_indices, top_similarities
 
-    def predict_with_preferences(self, preferences, top_k=10, hybrid_weight=0.7):
+    def predict_with_preferences(self, preferences, top_k=SETTINGS['evaluation']['top_k'], hybrid_weight=0.7):
         """
         Generate recommendations using preference-based similarity and AutoRec.
         """
@@ -423,7 +344,7 @@ class PreferenceBasedPredictor:
         return list(zip(popular_indices, popular_scores))
 
 def generate_preference_based_recommendations(model, interaction_matrix, device,
-                                              preferences, top_k=10):
+                                              preferences, top_k=SETTINGS['evaluation']['top_k']):
     """
     Generate recommendations for new users based on preference slider inputs.
     """

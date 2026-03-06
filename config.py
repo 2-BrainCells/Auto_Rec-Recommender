@@ -3,11 +3,11 @@ import pickle
 from typing import Dict, Any
 import yaml
 
-# def load_settings(filepath='settings.yaml'):
-#     with open(filepath, 'r') as file:
-#         return yaml.safe_load(file)
+def load_settings(filepath='settings.yaml'):
+    with open(filepath, 'r') as file:
+        return yaml.safe_load(file)
 
-# SETTINGS = load_settings()
+SETTINGS = load_settings()
 
 class ConfigManager:
     """

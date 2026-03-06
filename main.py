@@ -3,7 +3,7 @@ from preprocessing import read_data, split_data, load_data, device, validate_no_
 from autorec import ARDataset, DataLoader, AutoRec, optim, nn
 from hpo import run
 from utils import train_ranking, evaluator, generate_autorec_recommendations, display_recommendations
-from config import get_config
+from config import SETTINGS, get_config
 import matplotlib.pyplot as plt
 import pandas as pd
 
@@ -69,7 +69,7 @@ def auto_rec_runner():
     optimizer = optim.Adam(net.parameters(), lr=best_params["lr"], weight_decay=best_params["weight_decay"])
     loss_fn = nn.MSELoss()
 
-    train_loss, test_loss, test_rmse, test_recall, test_ndcg, _, _, _ = train_ranking(
+    train_loss, test_loss, test_rmse, test_recall, test_ndcg, test_div, test_nov, test_cov = train_ranking(
         net=net,
         train_iter=train_iter,
         test_iter=test_iter,
@@ -82,6 +82,20 @@ def auto_rec_runner():
         test_matrix=test_inter_mat,
         early_stopping_patience=7,
     )
+
+    # If not, simply set it to 5 since that's what your evaluator defaults to.
+    k_val = SETTINGS['evaluation']['top_k']
+
+    # 3. Print the final summary block
+    print("\n" + "="*50)
+    print("🏆 TRAINING COMPLETED - FINAL METRICS")
+    print("="*50)
+    print(f"Test RMSE: {test_rmse[-1]:.4f}")
+    print(f"Recall@{k_val}:  {test_recall[-1]:.4f}")
+    print(f"NDCG@{k_val}:    {test_ndcg[-1]:.4f}")
+    print(f"Diversity: {test_div[-1]:.4f}")
+    print(f"Novelty:   {test_nov[-1]:.4f}")
+    print(f"Coverage:  {test_cov[-1]:.4f}")
 
     plt.figure(figsize=(8, 6))
     plt.plot(train_loss, label='Train Loss')
@@ -104,7 +118,7 @@ def auto_rec_runner():
             interaction_matrix=test_inter_mat,
             device=device,
             user_id=user_id,
-            top_k=5
+            top_k=SETTINGS['evaluation']['top_k']
         )
         display_recommendations(recommendations, f"Existing User {user_id}")
 

@@ -4,7 +4,7 @@ data:
   max_nan_ratio: 0.40
 
 evaluation:
-  top_k: 5
+  top_k: 10
   relevant_rating_threshold: 0.6 # corresponds to 3/5
   diversity_min_similarity: 0.1
 
