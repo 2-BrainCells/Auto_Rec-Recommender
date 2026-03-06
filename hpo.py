@@ -3,25 +3,23 @@ import yaml
 import torch
 from preprocessing import read_data, split_data, load_data, device
 from autorec import ARDataset, DataLoader, AutoRec
-from utils import optim, nn, evaluator, train_ranking, OptunaEarlyStoppingCallback
+from utils import optim, nn, train_ranking, OptunaEarlyStoppingCallback
+# Assuming evaluator is imported from utils properly
+from utils import evaluator 
 import optuna
 from optuna.trial import TrialState
 import optuna.visualization as vis
-import plotly
 
 class HiddenPrints:
     """
     Context manager to suppress stdout output during training operations.
     Used to reduce verbose output during hyperparameter optimization trials.
     """
-    
     def __enter__(self):
-        """Redirect stdout to null device."""
         self._original_stdout = sys.stdout
         sys.stdout = open(os.devnull, 'w')
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """Restore original stdout."""
         sys.stdout.close()
         sys.stdout = self._original_stdout
 
@@ -29,18 +27,14 @@ def objective(trial):
     """
     Optuna objective function for hyperparameter optimization.
     Defines the search space and trains model with suggested parameters.
-    
-    Args:
-        trial: Optuna trial object containing suggested hyperparameters
-        
-    Returns:
-        Final val RMSE score for the trial
     """
     hidden_dim = trial.suggest_categorical('hidden_dim', [8, 16, 32, 64, 128, 512, 1024])
     lr = trial.suggest_float('lr', 1e-4, 1e-2, log=True)
     weight_decay = trial.suggest_float('weight_decay', 1e-5, 1e-3, log=True)
     batch_size = trial.suggest_categorical('batch_size', [8, 16, 32, 64, 128, 256, 512])
-    split = trial.suggest_float('split', 0.1, 0.30)
+    
+    # HARDCODED SPLIT: Removed from trial.suggest to maintain a strict 20% for research integrity
+    split = 0.20
 
     torch.manual_seed(trial.number)
 
@@ -72,8 +66,7 @@ def objective(trial):
     num_epochs = 50
 
     with HiddenPrints():
-        # Catch all 5 returns
-        _, _, _, _, val_ndcg = train_ranking(
+        _, _, _, _, val_ndcg,_, _, _ = train_ranking(
             net=net,
             train_iter=train_iter,
             test_iter=val_iter,
@@ -82,26 +75,20 @@ def objective(trial):
             num_epochs=num_epochs,
             device=device,
             evaluator=evaluator,
-            train_matrix=train_inter_mat,  # <--- Pass Train Matrix
-            test_matrix=val_inter_mat      # <--- Pass Test Matrix
+            train_matrix=train_inter_mat,
+            test_matrix=val_inter_mat
         )
 
     print(f"Trial {trial.number}: hidden_dim={hidden_dim}, lr={lr:.6f}, "
           f"weight_decay={weight_decay:.6f}, batch_size={batch_size}, "
           f"split={split:.3f}, final_ndcg={val_ndcg[-1]:.6f}")
 
-    # Return negative NDCG so Optuna's 'minimize' direction finds the highest NDCG
+    # Return negative NDCG so Optuna minimizes it (meaning it maximizes the actual NDCG)
     return -val_ndcg[-1]
 
 def create_config_yaml(best_params):
     """
     Create YAML configuration file with optimized hyperparameters.
-    
-    Args:
-        best_params: Dictionary of best hyperparameters found
-        
-    Returns:
-        Configuration dictionary
     """
     filename = "Auto_Rec_best_params"
     config = {
@@ -141,26 +128,30 @@ from config import save_hpo_results
 def run():
     """
     Execute hyperparameter optimization study with early stopping and visualization.
-    
-    Returns:
-        Dictionary of best hyperparameters found during optimization
     """
     early_stopping = OptunaEarlyStoppingCallback(patience=4)
     study = optuna.create_study(study_name="AutoRec HPO", direction='minimize')
     study.optimize(objective, n_trials=100, callbacks=[early_stopping])
 
-    config = save_hpo_results(study.best_params, study.best_value)
+    # Get best params and explicitly inject the hardcoded split so downstream files don't crash
+    best_params = study.best_params
+    best_params['split'] = 0.20
 
-    print(f"Best val_rmse loss: {study.best_value}")
-    print(f"Best hyperparameters: {study.best_params}")
+    config = save_hpo_results(best_params, study.best_value)
 
-    history_plot = vis.plot_optimization_history(study)
-    history_plot.show()
+    print(f"Best val_ndcg (negative): {study.best_value}")
+    print(f"Best hyperparameters: {best_params}")
 
-    param_importance = vis.plot_param_importances(study)
-    param_importance.show()
+    try:
+        history_plot = vis.plot_optimization_history(study)
+        history_plot.show()
 
-    parallel_plot = vis.plot_parallel_coordinate(study)
-    parallel_plot.show()
+        param_importance = vis.plot_param_importances(study)
+        param_importance.show()
 
-    return study.best_params
+        parallel_plot = vis.plot_parallel_coordinate(study)
+        parallel_plot.show()
+    except Exception as e:
+        print(f"Could not render Optuna plots: {e}")
+
+    return best_params

@@ -79,73 +79,82 @@ def masked_loss(predictions, targets, mask, loss_fn=nn.MSELoss(reduction='none')
 def evaluator(net, train_matrix, test_matrix, loss_fn, device=device, k=5):
     """
     Evaluate trained AutoRec model performance.
-    INPUT: train_matrix (what the model knows)
-    TARGET: test_matrix (what the model is trying to guess)
+    Calculates Loss, RMSE, Recall, NDCG, Diversity, Novelty, and Coverage.
     """
     net.eval()
     all_recall, all_ndcg = [], []
+    all_diversity, all_novelty = [], []
+    global_recommended_items = set() # To track overall catalog coverage
     total_loss = 0.0
-    valid_users = 0
+    
+    total_items = train_matrix.shape[1]
 
-    # Convert to tensors
-    train_tensor = torch.tensor(train_matrix, dtype=torch.float32).to(device)
+    if torch.is_tensor(train_matrix):
+        train_matrix_np = train_matrix.cpu().numpy()
+    else:
+        train_matrix_np = np.array(train_matrix)
+
     test_tensor = torch.tensor(test_matrix, dtype=torch.float32).to(device)
     test_mask = (~(test_tensor <= 0)).float().to(device)
+    train_tensor = torch.tensor(train_matrix, dtype=torch.float32).to(device)
 
     with torch.no_grad():
-        # Input the PAST (train), predict the FUTURE (test)
         preds = net(train_tensor)
         
-        # Calculate loss ONLY on the hidden test items
         loss = masked_loss(preds, test_tensor, test_mask, loss_fn)
         total_loss = loss.item()
         
         preds_np = preds.cpu().numpy()
         trues_np = test_tensor.cpu().numpy()
         masks_np = test_mask.cpu().numpy()
-        train_np = train_matrix
 
-        # Calculate Ranking Metrics
         for i in range(preds_np.shape[0]):
             user_pred = preds_np[i].copy()
             user_true = trues_np[i]
             user_mask = masks_np[i]
             
-            # Mask out items the user already interacted with in training
-            user_pred[train_np[i] > 0] = -999.0
+            # Mask out training items
+            user_pred[train_matrix_np[i] > 0] = -999.0
             
-            # Relevant items are test items rated >= 0.6 (3 out of 5)
             relevant_items = np.where((user_true >= 0.6) & (user_mask == 1))[0].tolist()
             
             if not relevant_items:
                 continue  
                 
-            valid_users += 1
             top_k_indices = np.argsort(user_pred)[-k:][::-1].tolist()
             recommended_items = [(item, user_pred[item]) for item in top_k_indices]
             
+            # Track for Coverage (Unique items recommended across ALL users)
+            for item, _ in recommended_items:
+                global_recommended_items.add(item)
+            
+            # Calculate metrics for this user
             all_recall.append(calculate_recall_at_k(recommended_items, relevant_items, k))
             all_ndcg.append(calculate_ndcg_at_k(recommended_items, relevant_items, k))
+            all_diversity.append(calculate_recommendation_diversity(recommended_items, train_matrix_np))
+            all_novelty.append(compute_recommendation_novelty(recommended_items, train_matrix_np))
 
-    # Calculate global RMSE over the test mask
     mse = np.sum(((preds_np - trues_np) ** 2) * masks_np) / (np.sum(masks_np) + 1e-10)
     rmse = np.sqrt(mse)
     
     avg_recall = np.mean(all_recall) if all_recall else 0.0
     avg_ndcg = np.mean(all_ndcg) if all_ndcg else 0.0
+    avg_div = np.mean(all_diversity) if all_diversity else 0.0
+    avg_nov = np.mean(all_novelty) if all_novelty else 0.0
+    coverage = len(global_recommended_items) / total_items if total_items > 0 else 0.0
 
-    return total_loss, rmse, avg_recall, avg_ndcg
+    return total_loss, rmse, avg_recall, avg_ndcg, avg_div, avg_nov, coverage
 
 
 def train_ranking(net, train_iter, test_iter, loss_fn, optimizer, num_epochs, device=None, evaluator=None, train_matrix=None, test_matrix=None, early_stopping_patience=5):
     """
-    Train AutoRec model using masked loss with evaluation tracking.
+    Train AutoRec model using masked loss with advanced evaluation tracking.
     """
     net.train()
-    train_loss, test_loss, test_rmse, test_recall, test_ndcg = [], [], [], [], []
+    train_loss, test_loss, test_rmse = [], [], []
+    test_recall, test_ndcg = [], []
+    test_div, test_nov, test_cov = [], [], [] # Arrays for advanced metrics
     
-    # We want to early-stop on NDCG now. Since EarlyStopping usually looks for a drop,
-    # and we want NDCG to go UP, we will feed it negative NDCG later.
     early_stopper = EarlyStopping(patience=early_stopping_patience, min_delta=1e-4)
     
     for epoch in range(num_epochs):
@@ -161,11 +170,10 @@ def train_ranking(net, train_iter, test_iter, loss_fn, optimizer, num_epochs, de
 
         train_l = total_loss / len(train_iter)
 
-        # Ensure both matrices exist before passing them to the evaluator
         if evaluator and train_matrix is not None and test_matrix is not None:
-            test_l, rmse, recall, ndcg = evaluator(net, train_matrix, test_matrix, loss_fn, device)
+            test_l, rmse, recall, ndcg, div, nov, cov = evaluator(net, train_matrix, test_matrix, loss_fn, device)
         else:
-            test_l, rmse, recall, ndcg = None, None, None, None
+            test_l, rmse, recall, ndcg, div, nov, cov = [None]*7
 
         train_loss.append(train_l)
         test_loss.append(test_l)
@@ -174,18 +182,20 @@ def train_ranking(net, train_iter, test_iter, loss_fn, optimizer, num_epochs, de
         if recall is not None:
             test_recall.append(recall)
             test_ndcg.append(ndcg)
+            test_div.append(div)
+            test_nov.append(nov)
+            test_cov.append(cov)
 
-        print(f"Epoch {epoch + 1}/{num_epochs} | Train Loss: {train_l:.3f} | Test Loss: {test_l:.3f} | Test RMSE: {rmse:.3f} | Recall@5: {recall:.3f} | NDCG@5: {ndcg:.3f}")
+        print(f"Epoch {epoch + 1}/{num_epochs} | RMSE: {rmse:.3f} | NDCG: {ndcg:.3f} | Div: {div:.3f} | Nov: {nov:.3f} | Cov: {cov:.3f}")
         
         if ndcg is not None:
-            # We pass negative NDCG because the EarlyStopper stops when values stop dropping.
-            # We want it to stop when NDCG stops RISING (i.e., when -ndcg stops dropping).
             early_stopper(-ndcg)
             if early_stopper.early_stop:
                 print(f"Early stopping triggered at epoch {epoch + 1}")
                 break
 
-    return train_loss, test_loss, test_rmse, test_recall, test_ndcg
+    # Return ALL tracked metrics
+    return train_loss, test_loss, test_rmse, test_recall, test_ndcg, test_div, test_nov, test_cov
 
 def load_and_use_config(config_path="Auto_Rec_best_params"):
     """
@@ -518,3 +528,34 @@ def calculate_ndcg_at_k(recommended_items, relevant_items, k=5):
     idcg = sum(1.0 / np.log2(i + 2) for i in range(min(k, len(relevant_items))))
     
     return dcg / idcg if idcg > 0 else 0.0
+
+def get_recommendation_explanation(recommended_item, user_id, interaction_matrix):
+    """
+    Provides item-to-item similarity explainability for a recommendation.
+    Finds the item the user previously liked that is most similar to the recommended item.
+    """
+    # Transpose matrix to compute item-to-item similarity instead of user-to-user
+    item_vectors = interaction_matrix.T
+    
+    # Calculate how similar the recommended item is to EVERY other item
+    sims = cosine_similarity(item_vectors[recommended_item].reshape(1, -1), item_vectors)[0]
+    
+    # Get the items the user has actually interacted with
+    user_ratings = interaction_matrix[user_id]
+    interacted_items = np.where(user_ratings > 0)[0]
+    
+    if len(interacted_items) == 0:
+        return "Recommended based on overall system popularity."
+    
+    # Find the past item with the highest similarity to the new recommendation
+    best_sim = -1
+    best_item = -1
+    for item in interacted_items:
+        if sims[item] > best_sim:
+            best_sim = sims[item]
+            best_item = item
+            
+    # Return the closest match if the similarity is greater than 0
+    if best_sim > 0:
+        return best_item, best_sim
+    return "Recommended based on generalized user trends."

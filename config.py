@@ -1,6 +1,13 @@
 import os
 import pickle
-from typing import Dict, Any, Optional
+from typing import Dict, Any
+import yaml
+
+# def load_settings(filepath='settings.yaml'):
+#     with open(filepath, 'r') as file:
+#         return yaml.safe_load(file)
+
+# SETTINGS = load_settings()
 
 class ConfigManager:
     """
@@ -32,11 +39,11 @@ class ConfigManager:
                 'use_demographics': False
             },
             'hyperparameters': {
-                'hidden_dim': 512,
-                'lr': 0.000299,
-                'weight_decay': 0.0001,
-                'batch_size': 256,
-                'split': 0.1588,
+                'hidden_dim': 32,
+                'lr': 0.00052,
+                'weight_decay': 0.00041,
+                'batch_size': 32,
+                # 'split': 0.1588,
                 'dropout': 0.2
             },
             'training': {

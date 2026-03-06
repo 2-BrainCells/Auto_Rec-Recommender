@@ -9,6 +9,10 @@ import plotly.express as px
 import plotly.graph_objects as go
 import os
 import io
+
+from sklearn.manifold import TSNE
+from utils import get_recommendation_explanation
+
 from autorec import AutoRec, ARDataset, DataLoader
 from preprocessing import split_data, load_data, device
 from utils import (train_ranking, evaluator, masked_loss, generate_autorec_recommendations,
@@ -245,7 +249,7 @@ class AutoRecStreamlitUI:
                 train_l = total_loss / len(train_iter)
                 
                 # FIXED: Pass train_inter_mat and test_inter_mat to the new evaluator
-                test_l, rmse, recall, ndcg = evaluator(model, train_inter_mat, test_inter_mat, loss_fn, device)
+                test_l, rmse, recall, ndcg, _, _, _ = evaluator(model, train_inter_mat, test_inter_mat, loss_fn, device)
                 
                 train_losses.append(train_l)
                 test_losses.append(test_l)
@@ -601,34 +605,51 @@ class AutoRecStreamlitUI:
         else:
             st.info("Your recommendations are based on similarity with other users who have similar overall preferences.")
 
-    def display_recommendations_ui(self, recommendations, user_type):
+    def display_recommendations_ui(self, recommendations, user_type, user_input=None):
         if not recommendations:
             st.warning("No recommendations available.")
             return
 
         st.subheader(f"🎯 Top Recommendations for {user_type}")
 
+        # Reverse the / 5.0 preprocessing scale back to reality for the UI
         rec_df = pd.DataFrame([
             {
                 'Rank': i + 1,
                 'Item ID': item_id,
-                'Predicted Score': f"{score:.4f}",
+                'Predicted Score': f"{min(5.0, max(0.0, score * 5.0)):.2f} / 5.0",
                 'Item Name': self.get_item_name(item_id)
             }
             for i, (item_id, score) in enumerate(recommendations)
         ])
 
         st.dataframe(rec_df, use_container_width=True, hide_index=True)
+        
+        # --- NEW: Explainability Section ---
+        if user_type == "Existing User" and self.interaction_matrix is not None and user_input is not None:
+            st.markdown("### 💡 Why are we recommending these?")
+            user_id = user_input["data"]
+            
+            for item_id, score in recommendations[:3]: # Explain the top 3
+                explanation = get_recommendation_explanation(item_id, user_id, self.interaction_matrix)
+                item_name = self.get_item_name(item_id)
+                
+                if isinstance(explanation, tuple):
+                    best_item, sim_score = explanation
+                    past_item_name = self.get_item_name(best_item)
+                    st.info(f"**{item_name}** \n\nRecommended because users who benefited from **{past_item_name}** (which you interacted with) also heavily utilized this.")
+                else:
+                    st.info(f"**{item_name}** - {explanation}")
 
+        # (Keep the existing Plotly charts below)
         col1, col2 = st.columns(2)
-
         with col1:
-            scores = [float(score.split(': ')[-1]) if ': ' in score else float(score) for score in rec_df['Predicted Score']]
+            scores = [float(score.split(' /')[0]) for score in rec_df['Predicted Score']]
             fig_bar = px.bar(
                 x=rec_df['Rank'],
                 y=scores,
                 title='Recommendation Scores',
-                labels={'y': 'Score', 'x': 'Rank'}
+                labels={'y': 'Score (Out of 5)', 'x': 'Rank'}
             )
             st.plotly_chart(fig_bar, use_container_width=True)
 
@@ -636,9 +657,49 @@ class AutoRecStreamlitUI:
             fig_pie = px.pie(
                 values=scores[:5],
                 names=[f"Item {rec_df.iloc[i]['Item ID']}" for i in range(min(5, len(rec_df)))],
-                title="Top 5 Items Distribution"
+                title="Top 5 Items Score Distribution"
             )
             st.plotly_chart(fig_pie, use_container_width=True)
+            
+    def visualize_latent_space(self):
+        st.subheader("🌌 User Latent Space Visualization")
+        st.markdown("This 2D projection uses t-SNE to visualize the hidden representations learned by the Autoencoder. Users who are clustered together share similar learning aid preferences.")
+        
+        if self.model is None or self.interaction_matrix is None:
+            st.warning("Model needs to be trained first.")
+            return
+            
+        with st.spinner("Extracting embeddings and applying dimensionality reduction..."):
+            self.model.eval()
+            with torch.no_grad():
+                # Pass the matrix through the ENCODER only to get the compressed representation
+                tensor_matrix = torch.tensor(self.interaction_matrix, dtype=torch.float32).to(device)
+                latent_features = self.model.encoder(tensor_matrix)
+                latent_features = self.model.sigmoid(latent_features).cpu().numpy()
+                
+            # Apply t-SNE to reduce the hidden dimension down to 2D for plotting
+            tsne = TSNE(n_components=2, random_state=42, perplexity=30, max_iter=1000)
+            latent_2d = tsne.fit_transform(latent_features)
+            
+            # Calculate total interactions per user to size/color the bubbles
+            interaction_counts = np.sum(self.interaction_matrix > 0, axis=1)
+            
+            df_viz = pd.DataFrame({
+                'Dim 1': latent_2d[:, 0],
+                'Dim 2': latent_2d[:, 1],
+                'Total Interactions': interaction_counts,
+                'User ID': range(len(interaction_counts))
+            })
+            
+            fig = px.scatter(
+                df_viz, x='Dim 1', y='Dim 2', 
+                color='Total Interactions', 
+                hover_data=['User ID', 'Total Interactions'],
+                title='User Clusters in Learned Latent Space (t-SNE)',
+                color_continuous_scale='Viridis'
+            )
+            fig.update_layout(template='plotly_white')
+            st.plotly_chart(fig, use_container_width=True)
 
     def show_training_status(self):
         if self.trained:
@@ -744,7 +805,13 @@ class AutoRecStreamlitUI:
                         if st.button("Generate Recommendations", type="secondary"):
                             with st.spinner("Generating recommendations..."):
                                 recommendations = self.generate_recommendations(user_input, user_type)
-                                self.display_recommendations_ui(recommendations, user_type)
+                                self.display_recommendations_ui(recommendations, user_type, user_input)
+                                
+                            # NEW: Add a button to render the Latent Space map
+                        st.markdown("---")
+                        if st.button("🌌 Visualize Latent Space Clusters", type="secondary"):
+                            self.visualize_latent_space()
+                            
                     else:
                         st.info("👆 Please train the model to generate recommendations.")
                 else:
