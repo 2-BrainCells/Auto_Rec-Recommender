@@ -2,7 +2,7 @@ import os
 from preprocessing import read_data, split_data, load_data, device, validate_no_demographics_used
 from autorec import ARDataset, DataLoader, AutoRec, optim, nn
 from hpo import run
-from utils import train_ranking, evaluator, generate_autorec_recommendations, display_recommendations
+from utils import train_ranking, evaluator, generate_autorec_recommendations, display_recommendations, plot_long_tail_distribution
 from config import SETTINGS, get_config
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -84,7 +84,7 @@ def auto_rec_runner():
     )
 
     # If not, simply set it to 5 since that's what your evaluator defaults to.
-    k_val = SETTINGS['evaluation']['top_k']
+    k_val = [3, 5, 10]
 
     # 3. Print the final summary block
     print("\n" + "="*50)
@@ -96,16 +96,62 @@ def auto_rec_runner():
     print(f"Diversity: {test_div[-1]:.4f}")
     print(f"Novelty:   {test_nov[-1]:.4f}")
     print(f"Coverage:  {test_cov[-1]:.4f}")
+    
+    print("\n" + "="*80)
+    print("🏆 MULTI-K EVALUATION SUMMARY (FOR RESEARCH PAPER)")
+    print("="*80)
+    
+    # We evaluate the trained 'net' on K = 3, 5, and 10
+    k_values = [3, 5, 10]
+    
+    # Print the table header
+    print(f"{'Metric':<15} | {'K=3':<10} | {'K=5':<10} | {'K=10':<10}")
+    print("-" * 55)
+    
+    # Dictionaries to store results
+    results = {'Recall': [], 'NDCG': [], 'Diversity': [], 'Novelty': [], 'Coverage': []}
+    final_rmse = 0.0
+    
+    # Run the evaluator for each K
+    for k in k_values:
+        _, rmse, recall, ndcg, div, nov, cov = evaluator(
+            net, train_inter_mat, test_inter_mat, loss_fn, device, k=k
+        )
+        final_rmse = rmse # RMSE is the same for all K
+        results['Recall'].append(recall)
+        results['NDCG'].append(ndcg)
+        results['Diversity'].append(div)
+        results['Novelty'].append(nov)
+        results['Coverage'].append(cov)
 
-    plt.figure(figsize=(8, 6))
-    plt.plot(train_loss, label='Train Loss')
-    plt.plot(test_loss, label='Test Loss')
-    plt.plot(test_rmse, '-o', label='Test RMSE')
-    plt.ylabel('Loss')
-    plt.xlabel('Epoch')
-    plt.legend()
-    plt.title('Training / Testing Loss and Test RMSE over Epochs')
-    plt.show()
+    # Print the rows
+    print(f"{'Recall@K':<15} | {results['Recall'][0]:<10.4f} | {results['Recall'][1]:<10.4f} | {results['Recall'][2]:<10.4f}")
+    print(f"{'NDCG@K':<15} | {results['NDCG'][0]:<10.4f} | {results['NDCG'][1]:<10.4f} | {results['NDCG'][2]:<10.4f}")
+    print(f"{'Diversity':<15} | {results['Diversity'][0]:<10.4f} | {results['Diversity'][1]:<10.4f} | {results['Diversity'][2]:<10.4f}")
+    print(f"{'Novelty':<15} | {results['Novelty'][0]:<10.4f} | {results['Novelty'][1]:<10.4f} | {results['Novelty'][2]:<10.4f}")
+    print(f"{'Coverage':<15} | {results['Coverage'][0]:<10.4f} | {results['Coverage'][1]:<10.4f} | {results['Coverage'][2]:<10.4f}")
+    print("-" * 55)
+    print(f"{'RMSE (Global)':<15} | {final_rmse:<10.4f} | {final_rmse:<10.4f} | {final_rmse:<10.4f}")
+    print("="*80 + "\n")
+
+    # --- NEW: Generate the Long Tail Figure for the Paper ---
+    plot_long_tail_distribution(
+        net=net,
+        train_matrix=train_inter_mat,
+        test_matrix=test_inter_mat,
+        device=device,
+        k=5,  # We use 5 as the standard for your paper
+        save_path="autorec_long_tail_figure.png"
+    )
+    # plt.figure(figsize=(8, 6))
+    # plt.plot(train_loss, label='Train Loss')
+    # plt.plot(test_loss, label='Test Loss')
+    # plt.plot(test_rmse, '-o', label='Test RMSE')
+    # plt.ylabel('Loss')
+    # plt.xlabel('Epoch')
+    # plt.legend()
+    # plt.title('Training / Testing Loss and Test RMSE over Epochs')
+    # plt.show()
 
     print("\n" + "="*50)
     print("GENERATING RECOMMENDATIONS (NO DEMOGRAPHICS USED)")

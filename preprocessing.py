@@ -15,7 +15,7 @@ def read_data():
     Returns:
         Tuple of (processed_dataframe, num_users, num_items)
     """
-    df = pd.read_csv('data/values.csv')
+    df = pd.read_csv('values.csv')
     df = df.iloc[:, 12:]
     df = df.replace(['NC', 'NSU', ' '], np.nan)
     df = df.apply(pd.to_numeric, errors='coerce')

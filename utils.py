@@ -480,3 +480,81 @@ def get_recommendation_explanation(recommended_item, user_id, interaction_matrix
     if best_sim > 0:
         return best_item, best_sim
     return "Recommended based on generalized user trends."
+
+def plot_long_tail_distribution(net, train_matrix, test_matrix, device, k=5, save_path="long_tail_plot.png"):
+    """
+    Generates a high-resolution Long-Tail Distribution plot for research papers.
+    Compares historical item popularity against AutoRec's recommendation frequency.
+    """
+    net.eval()
+    
+    # Handle tensor conversion safely
+    if torch.is_tensor(train_matrix):
+        train_matrix_np = train_matrix.cpu().numpy()
+    else:
+        train_matrix_np = np.array(train_matrix)
+        
+    if torch.is_tensor(test_matrix):
+        test_matrix_np = test_matrix.cpu().numpy()
+    else:
+        test_matrix_np = np.array(test_matrix)
+
+    train_tensor = torch.tensor(train_matrix_np, dtype=torch.float32).to(device)
+    num_items = train_matrix_np.shape[1]
+    
+    # 1. Calculate Historical Popularity (How many users rated each item in training)
+    item_popularity = np.sum(train_matrix_np > 0, axis=0)
+    
+    # 2. Calculate Recommendation Frequency (How many times the model recommends it)
+    rec_counts = np.zeros(num_items)
+    
+    with torch.no_grad():
+        preds = net(train_tensor).cpu().numpy()
+        
+        for i in range(preds.shape[0]):
+            user_pred = preds[i].copy()
+            user_pred[train_matrix_np[i] > 0] = -999.0 # Mask out training items
+            
+            # Only count recommendations for users who actually have hidden test data
+            if np.sum(test_matrix_np[i] > 0) > 0:
+                top_k_indices = np.argsort(user_pred)[-k:][::-1]
+                for item in top_k_indices:
+                    rec_counts[item] += 1
+                    
+    # 3. Sort items by their historical popularity (Highest to Lowest)
+    sorted_indices = np.argsort(item_popularity)[::-1]
+    sorted_popularity = item_popularity[sorted_indices]
+    sorted_recs = rec_counts[sorted_indices]
+    
+    # Normalize arrays to 0-1 scale so they fit beautifully on the same Y-axis
+    sorted_popularity_norm = sorted_popularity / np.max(sorted_popularity)
+    sorted_recs_norm = sorted_recs / np.max(sorted_recs) if np.max(sorted_recs) > 0 else sorted_recs
+    
+    # 4. Create the Matplotlib Figure (300 DPI for Academic Publishing)
+    plt.figure(figsize=(10, 6), dpi=300)
+    
+    x = np.arange(num_items)
+    
+    # Gray background bars representing how the actual dataset looks
+    plt.bar(x, sorted_popularity_norm, color='lightgray', alpha=0.8, edgecolor='none', 
+            label='Historical Popularity (Training Data)')
+    
+    # Blue line representing the model's behavior
+    plt.plot(x, sorted_recs_norm, color='#1f77b4', marker='o', linewidth=2.5, 
+             markersize=6, label=f'AutoRec Recommendation Frequency (Top-{k})')
+    
+    # Formatting
+    plt.title("Long-Tail Recommendation Distribution", fontsize=14, fontweight='bold', pad=15)
+    plt.xlabel("Catalog Items (Sorted by Global Popularity → Least Popular)", fontsize=12, labelpad=10)
+    plt.ylabel("Normalized Frequency", fontsize=12, labelpad=10)
+    
+    # Remove x-ticks since item IDs don't mean anything visually
+    plt.xticks([])
+    
+    plt.legend(fontsize=11, loc='upper right', framealpha=0.9)
+    plt.grid(axis='y', linestyle='--', alpha=0.4)
+    
+    plt.tight_layout()
+    plt.savefig(save_path)
+    plt.close()
+    print(f"\n📊 Academic Long-Tail plot saved successfully to: {save_path}")
