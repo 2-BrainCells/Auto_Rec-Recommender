@@ -9,3 +9,4 @@ autorec_architecture_diagram.md
 *.txt
 workflow_summary.md
 *.pdf
+extract_pdf.py
