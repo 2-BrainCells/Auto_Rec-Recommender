@@ -1,3 +1,11 @@
 *.pkl
 
 *.pth
+
+*.csv
+
+auto_rec_paper_draft.md
+autorec_architecture_diagram.md
+*.txt
+workflow_summary.md
+*.pdf
